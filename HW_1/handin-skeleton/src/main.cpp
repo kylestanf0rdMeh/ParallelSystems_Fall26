@@ -36,15 +36,14 @@ int main(int argc, char **argv)
     scan_operator = op;
     //scan_operator = add;
 
-    int *work = NULL;
+    // scratch for the padded tree, set up before the timer so allocation is not measured
+    int *work = (int*) malloc(next_power_of_two(n_vals) * sizeof(int));
     pthread_barrier_t bar;
-    if (!sequential) {
-        work = (int*) malloc(next_power_of_two(n_vals) * sizeof(int));
-        pthread_barrier_init(&bar, NULL, opts.n_threads);
-    }
+    pthread_barrier_init(&bar, NULL, opts.n_threads);
+    spin_barrier sbar(opts.n_threads);
 
     fill_args(ps_args, opts.n_threads, n_vals, input_vals, output_vals,
-        opts.spin, scan_operator, opts.n_loops, work, &bar);
+        opts.spin, scan_operator, opts.n_loops, work, &bar, &sbar);
 
     // Start timer
     auto start = std::chrono::high_resolution_clock::now();
@@ -73,10 +72,8 @@ int main(int argc, char **argv)
     write_file(&opts, &(ps_args[0]));
 
     // Free other buffers
-    if (!sequential) {
-        pthread_barrier_destroy(&bar);
-        free(work);
-    }
+    pthread_barrier_destroy(&bar);
+    free(work);
     free(threads);
     free(ps_args);
 }

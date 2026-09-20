@@ -12,6 +12,15 @@ static void split_range(int n_items, int n_threads, int t_id, int *begin, int *e
     *end = lo + len;
 }
 
+static void barrier_wait(prefix_sum_args_t *args)
+{
+    if (args->spin) {
+        args->sbar->wait();
+    } else {
+        pthread_barrier_wait(args->bar);
+    }
+}
+
 void* compute_prefix_sum(void *a)
 {
     prefix_sum_args_t *args = (prefix_sum_args_t *)a;
@@ -26,7 +35,7 @@ void* compute_prefix_sum(void *a)
     for (int i = begin; i < end; ++i) {
         work[i] = i < n_vals ? args->input_vals[i] : 0;
     }
-    pthread_barrier_wait(args->bar);
+    barrier_wait(args);
 
     for (int stride = 2; stride <= padded; stride *= 2) {
         split_range(padded / stride, args->n_threads, args->t_id, &begin, &end);
@@ -36,14 +45,14 @@ void* compute_prefix_sum(void *a)
                                             work[i + stride - 1],
                                             args->n_loops);
         }
-        pthread_barrier_wait(args->bar);
+        barrier_wait(args);
     }
 
     // clearing the root turns the reduction tree into an exclusive scan
     if (args->t_id == 0) {
         work[padded - 1] = 0;
     }
-    pthread_barrier_wait(args->bar);
+    barrier_wait(args);
 
     for (int stride = padded; stride >= 2; stride /= 2) {
         split_range(padded / stride, args->n_threads, args->t_id, &begin, &end);
@@ -53,7 +62,7 @@ void* compute_prefix_sum(void *a)
             work[i + stride / 2 - 1] = work[i + stride - 1];
             work[i + stride - 1] = args->op(left, work[i + stride - 1], args->n_loops);
         }
-        pthread_barrier_wait(args->bar);
+        barrier_wait(args);
     }
 
     // the sweeps leave an exclusive scan, so fold each input back in to make it inclusive
