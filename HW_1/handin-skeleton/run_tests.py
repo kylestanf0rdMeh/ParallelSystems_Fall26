@@ -6,13 +6,13 @@
 
 import os
 import re
-import statistics
+import sys
 from subprocess import check_output
 
 INPUTS = ["1k.txt", "8k.txt", "16k.txt"]
 THREADS = list(range(2, 33, 2))
-INFLECTION_LOOPS = [1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000]
-REPEATS = 3
+INFLECTION_LOOPS = [1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000]
+REPEATS = 5
 
 
 def run(inp, n_threads, n_loops, spin):
@@ -22,7 +22,8 @@ def run(inp, n_threads, n_loops, spin):
     for _ in range(REPEATS):
         out = check_output(cmd, shell=True).decode("ascii")
         times.append(int(re.search("time: (.*)", out).group(1)))
-    return statistics.median(times)
+    # the box is shared, so the fastest run is the one least disturbed by other tenants
+    return min(times)
 
 
 def sweep_threads(n_loops, path):
@@ -55,9 +56,13 @@ def main():
     n_cores = os.cpu_count()
     print("cores:", n_cores)
 
-    sweep_threads(100000, "results/threads_l100000.csv")
-    sweep_threads(10, "results/threads_l10.csv")
-    sweep_loops("results/inflection.csv", n_cores)
+    which = sys.argv[1] if len(sys.argv) > 1 else "all"
+
+    if which in ("all", "threads"):
+        sweep_threads(100000, "results/threads_l100000.csv")
+        sweep_threads(10, "results/threads_l10.csv")
+    if which in ("all", "inflection"):
+        sweep_loops("results/inflection.csv", n_cores)
 
 
 main()
