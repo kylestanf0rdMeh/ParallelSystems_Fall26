@@ -1,0 +1,14 @@
+# build artifacts
+bin/*
+!bin/.placeholder
+*.o
+*.out
+
+# generated test inputs
+*.txt.in
+inputs/
+
+# editor / os
+.vscode/
+.DS_Store
+Thumbs.db

@@ -1,0 +1,170 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN">
+<!-- saved from url=(0078)https://www.cs.utexas.edu/~rossbach/cs380p/lab/prefix-sum-pthreads-cs380p.html -->
+<html><head><meta http-equiv="Content-Type" content="text/html; charset=windows-1252">
+  
+  <title>CS378H Assignment #1</title>
+    <style type="text/css">
+  body{ background-color: #EFEFEF; 
+        font-size:14.0pt;
+        font-family:"Times New Roman";
+        mso-fareast-font-family:"Times New Roman";}
+  h2{ line-height:1;}
+  h3{ line-height:1;}
+  h4{ line-height:1;}
+  pre{line-height:1;}
+  code{line-height:1}
+  table{ background-color: #F1EFEF; 
+        font-size:12.0pt;
+        font-family:"Times New Roman";
+        mso-fareast-font-family:"Times New Roman";} 
+  .strike{text-decoration: line-through;}
+  .red-one{background-color: red;
+           rowspan: 3}
+    </style>
+</head>
+<body>
+<h1>CS380P: Concurrency</h1>
+<h2>Lab #1: Prefix Scan and Barriers</h2>
+<p>
+  The goals of this assignment are:
+  </p><ul>
+    <li>To learn about parallel prefix scan algorithms</li>
+    <li>Compare their performance using different synchronization primitives</li>
+    <li>Gain experience implementing your own barrier primitive</li>
+    <li>Understand the performance tradeoffs made by your barrier implementation</li>
+  </ul>
+
+<p>
+  In this assignment, you will implement a work-efficient parallel prefix scan algorithm using the pthreads library and a 
+  synchronization barrier you will write yourself. We encourage you to think carefully about the various corner 
+  cases that exist when implementing this algorithm, and challenge you to think about the most performant way to synchronize
+  a parallel prefix scan depending on its input size.
+
+  </p><h3>Background</h3>
+
+<p><img src="./CS378H Assignment #1_files/pfxsum.png" height="400">
+</p><p>
+  Parallel prefix scan has come up a number of times so far in the course, and will come up again. It is a fundamental building
+  block for a lot of parallel algorithms. There are good materials on it in Dr. Lin's textbook, and the treatment of it you can
+  find on Wikipedia comes with reasonable pseudocode (see <a href="https://en.wikipedia.org/wiki/Prefix_sum">here</a>). You may
+  notice that prefix sum and prefix scan are in fact the same, with sum just being a single instance of the associative and
+  commutative operator that scan requires. Note that <i>you will be implementing a work-efficient parallel prefix scan</i>.
+  
+</p><h3>Setup</h3>
+  You are given a quite big skeleton code (<a href="https://www.cs.utexas.edu/~rossbach/cs380p/lab/lab1-skeleton.tar">download here</a>), along with a Makefile and two helper scripts (you could choose to completely ignore
+  as long as you measure the elapsed time of your code the same way the skeleton code does).
+  After understanding prefix scan you should
+  get comfortable with the code given to you. It contains a working sequential prefix scan, try compiling and running it.
+  There is a helper script that generates three inputs you are required to test against (1k.txt, 8k.txt and 16k.txt) and
+  a simple input with 64 increasing numbers.
+  
+  As we mentioned before, prefix scan can be implemented with any associative and commutative operator. In this lab you will use an 
+  operator that is given to you (operators.cpp). This operator takes two numbers (like any other binary operator) and an extra 
+  parameter (-l) that modifies the amount of times the operator loops.
+  In main.cpp you can switch between the operator you have to use (op) and simple integer adition (add), useful for debugging:
+  scan_operator = add;   or  scan_operator = op;
+  
+  For each of the steps below, you will be comparing the performance of your prefix scan implementations for different parameters
+  (argparse.cpp) over the input files that were generated.
+  You are also given a simple python script that runs your code while changing paramaters (run_tests.py). You are again, free to change it 
+  as you like.
+
+<h3>Sequential Implementation</h3>
+<p>
+  The sequential version is called when the number of threads specified on the command line is 0 (<code>-n 0</code>). Note that
+  using a single pthread (<code>-n 1</code>) is not the same, as it involves all the overheads of thread creation and teardown that would
+  not be present in a truly sequential implementation.
+  You can always test correctness of your parallel code by comparing to the sequential version.
+</p><p>
+
+</p><h3>Step 1: Parallel Implementation</h3>
+<p>
+  Recall that prefix scan requires a barrier for synchronization In this step, you will write a work-efficient parallel prefix scan using
+  pthread barriers. For each of the provided input sets, set the number of loops of the operator to 100000 (-l 100000) and
+  graph the execution time of your parallel implementation over a sequential prefix scan implementation as a function of the number of worker threads used. 
+  Vary from 2 to 32 threads in increments of 2. Then, explain the trends in the graph. Why do these occur?
+
+  From  <a href="https://developer.nvidia.com/gpugems/gpugems3/part-vi-gpu-computing/chapter-39-parallel-prefix-sum-scan-cuda">here</a>:
+  "A prefix sum algorithm is work-efficient if it does asymptotically no more work (add operations, in this case) than the sequential version. 
+  In other words the two implementations should have the same work complexity, O(n)."
+
+</p><h3>Step 2: Playing with Operators</h3>
+<p>
+  Now that you have a working and, hopefully, efficient parallel implementation of prefix scan, try changing the amount of loops the operator does
+  to 10 (-l 10) and plot the same graph as before. What happened and why?
+
+  Vary the -l argument and find the inflexion point, where sequential and parallel elapsed times meet (does not have to be exact, just somewhat similar).
+  Why can changing this number make the sequential version faster than the parallel? What is the most important characteristic of it that makes this 
+  happen? Argue this in a general way, as if different -l parameters were different operators, afterall, the -l parameter is just a way to quickly
+  create an operator that does something different.
+
+</p><h3>Step 3: Barrier Implementation</h3>
+<p>
+  In this step you will build your own re-entrant barrier. Recall from lecture that we considered a number of
+  implementation strategies and techniques. We recommend you base your barrier on pthread's spinlocks, but
+  encourage you to use other techniques we discussed in this course. Regardless of your technique, answer the
+  following questions: how is/isn't your implementation different from pthread barriers? In 
+  what scenario(s) would each implementation perform better than the other? What are the pathological cases for each?
+
+  Use your barrier implementation to implement the same work-efficient parallel prefix scan. Repeat the measurements from part 2,
+  graph them, and explain the trends in the graph. Why do these occur? What overheads cause your implementation to underperform an "ideal" speedup ratio? 
+
+</p><p>
+  How do the results from part 2 and part 3 compare? Are they in line with your expectations? Suggest some workload scenarios which would make each
+   implementation perform worse than the other.
+
+</p><h3>Inputs/Outputs</h3>
+<a name="io"></a>
+
+    Your program should accept the following four command line parameters (already in the skeleton, if you choose to use it), with types indicated 
+    in parentheses, and the meaning of each parameter 
+    described in angle brackets:
+
+    <ol>
+      <li>-n &lt;number of threads&gt; (int) <b>(0 means sequential, not 1 pthread!)</b></li>
+      <li>-i &lt;absolute path to input file&gt; (char *)</li>
+      <li>-o &lt;absolute path to output file&gt; (char *)</li>
+      <li>-l &lt;number of loops that the operator will do&gt; (int) </li>
+      <li>-s &lt;use your barrer implementation, else default to pthreads barrier&gt; (Optional)</li>
+    </ol>
+
+    <p>
+    The first line in the input file will contain a single integer <i>n</i> denoting the number of lines of input in the remainder of the 
+    input file. The following <i>n</i> lines will each contain a single integer/
+	</p><p>
+  The required inputs and a simple one can be generated by running the generate_input.py python script, but you are free
+  to create your own tests for debugging purposes.
+
+  </p><p>
+  You shouldn't change the Makefile since our grading script will assume the binary is built at a specific place and name.
+  Your solution should output the execution time in microseconds to stdout, and no other output. It is fine to produce other output on stdout as long 
+  as it is disabled by default, either at compile time (using macros) or at runtime (using an extra/optional command-line flag). 
+
+</p><h3>Deliverables</h3>
+
+<p>
+Submissions must be done on Canvas and you should
+include the following file in a tarball:
+</p><ul>
+<li>A written report of the assignment in either plain text or PDF format. Please explain your approach, present
+performance results, discuss any insights gained, etc.</li>
+<li>All your source code required to build the binary, including the Makefile.</li>
+</ul>
+
+<p>
+
+</p><h3>Notes</h3>
+<ul>
+  <li>Make sure that your implementations for parts 2 and 3 output a correct prefix sum for any number of threads.</li>
+  <li>Please implement an inclusive prefix scan, as opposed to an exclusive one.</li>
+  <li>You can modify/add any file you want. Just make sure the given makefile is unmodified and will compile your code correctly.</li>
+  <li>Input size might not be a power of 2. You should handle that case.</li>
+  <li>Do not print the length, or number of elements, when printing the output.</li>
+</ul>
+<p>
+Please report how much time you spent on the lab.
+</p>
+
+
+
+</body></html>

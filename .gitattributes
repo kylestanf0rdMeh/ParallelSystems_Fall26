@@ -1,0 +1,3 @@
+# source is built on linux, keep LF in the working tree
+* text=auto eol=lf
+*.png binary
