@@ -14,6 +14,8 @@ struct prefix_sum_args_t {
   int                t_id;
   int (*op)(int, int, int);
   int n_loops;
+  int*               work;
+  pthread_barrier_t* bar;
 };
 
 prefix_sum_args_t* alloc_args(int n_threads);
@@ -27,4 +29,6 @@ void fill_args(prefix_sum_args_t *args,
                int *outputs,
                bool spin,
                int (*op)(int, int, int),
-               int n_loops);
+               int n_loops,
+               int *work,
+               pthread_barrier_t *bar);
