@@ -154,6 +154,19 @@ from under you, on unbalanced work, and on coarse-grained work with long stretch
 barriers.
 
 
+Insights
+
+The main thing I took away is that work-efficient is a statement about big-O and the constant
+still decides what you actually measure. My scan is O(n) exactly as required and also does three
+times the work of the sequential loop, which is the difference between a ceiling of 8 and a
+ceiling of 2.67 on this machine. That one factor explains more of my graphs than anything about
+threads or barriers.
+
+The second is that spinning versus blocking is not a ranking, it depends on whether threads fit
+on cores. My barrier is three times better than the library's on one side of that line and
+nearly ninety times worse on the other, and the switch happens over two thread counts.
+
+
 Time spent
 
 Approximately TODO hours.
