@@ -20,13 +20,13 @@ into place. Each sweep does about n operator calls, so total work is O(n).
 
 The sweeps give an exclusive scan, where each slot holds the sum of everything before it but not
 itself, so a third pass adds each input back into its own slot to make it inclusive. The tree
-needs a power-of-two length, so I pad with zeros. Zero is the identity for the operator and
+needs a power-of-two length, so I pad with zeros, which is the identity for the operator and
 cannot change a real answer. All four supplied inputs are powers of two, so I made a
 1000-element input to test the padding.
 
-Threads split the nodes active at the current tree level. Every thread must finish a level
-before any thread starts the next, since the next level reads what the previous one wrote, so
-there is a barrier after each level. A 16384-element run crosses 31 barriers.
+Threads split the nodes active at the current tree level, and there is a barrier after each
+level since the next level reads what the previous one wrote. A 16384-element run crosses 31
+barriers.
 
 One thing drives most of my results. The two sweeps plus the inclusive pass do roughly three
 times the operator calls the sequential loop does. The algorithm is work-efficient in the big-O
@@ -34,14 +34,13 @@ sense, but the constant is 3, so on 8 cores my best possible speedup is about 8/
 
 For step 3 I wrote a sense-reversing barrier on a pthread spinlock. The spinlock protects a
 count of arrivals. The last thread to arrive resets the count and flips a shared atomic flag,
-and everyone else spins reading that flag. Sense reversal is what lets the barrier be reused.
-Each thread keeps its own copy of the value it waits for and flips it on entry, so one round
-releases on true and the next on false. Without it a fast thread could finish a level, come
-back, see the flag still set from the previous round, and walk through a barrier it should have
-waited at.
+and everyone else spins reading that flag. Sense reversal is what lets the barrier be reused:
+each thread keeps its own copy of the value it waits for and flips it on entry, so consecutive
+rounds release on opposite values. Without that, a fast thread could come back around and walk
+through a barrier on the previous round's flag.
 
 I checked correctness by diffing parallel output against the sequential path across five inputs
-and nine thread counts, including odd ones, with and without my barrier. All 45 cases matched.
+and nine thread counts, with and without my barrier. All 45 cases matched.
 
 
 Step 1 Discussion
@@ -63,10 +62,9 @@ on a shallower slope than ideal because it tracks p/3 instead of p.
 
 The flattening is the core count. With only 8 cores, extra threads add participants everyone
 waits for at every barrier without doing more work at once. My best was 2.47 against the ceiling
-of 2.67, so about 93 percent of what this algorithm can do here. Almost all of the gap to the
-ideal line is the work constant, not bad synchronization. Bigger inputs scale slightly better,
-2.47 on 16k versus 2.24 on 1k, because work grows with n while barrier count only grows with
-log n.
+of 2.67, so almost all of the gap to the ideal line is the work constant, not bad
+synchronization. Bigger inputs scale slightly better, 2.47 on 16k versus 2.24 on 1k, because
+work grows with n while barrier count only grows with log n.
 
 
 Step 2 Discussion
