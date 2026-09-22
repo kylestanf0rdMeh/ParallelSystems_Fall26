@@ -12,3 +12,4 @@ inputs/
 .vscode/
 .DS_Store
 Thumbs.db
+*.tar.gz
