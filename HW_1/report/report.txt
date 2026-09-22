@@ -88,48 +88,31 @@ Step 3 Discussion
 
 [GRAPH GOES HERE: speedup at -l 10, both barriers]
 
-Up to 8 threads my barrier matches the pthread barrier and is slightly better at 8. Past that
-they split apart. At 100000 loops the pthread version levels off near 2.3, while mine peaks at 8
-threads and falls to 0.79 on 1k at 32 threads, which is worse than not parallelizing at all. The
-10-loop graph shows it more sharply, since barriers are essentially the whole runtime there.
-Mine is about 3 times faster up to 8 threads and then falls off a cliff between 8 and 10.
+    Structurally my barrier isn't that different from the pthread one, since both count arrivals
+and release everyone once the count hits the thread total. The difference is what a waiting
+thread actually does, because the pthread barrier puts early arrivers to sleep in the kernel and
+gives up their core, while mine just spins on a flag and holds onto its core the whole time.
 
-The two barriers are structurally similar, since both count arrivals and release everyone at the
-thread total. The difference is what a waiting thread does. The pthread barrier puts early
-arrivers to sleep in the kernel, so they give up their cores at the cost of a system call and
-two context switches. Mine never sleeps, so release is about as fast as moving a cache line, but
-the thread holds its core the entire time and does nothing with it.
+    Mine performs better when the threads fit on the cores, since the wait is short and we skip
+the kernel entirely, and I measured it about 3 times faster up to 8 threads. The pthread barrier
+performs better once we go past 8 threads, where I saw mine run 15 - 19 times slower at 10
+threads and up to 89 times slower at 32.
 
-That tradeoff is exactly what the numbers show. When threads fit on cores mine wins, because the
-wait is short and skipping the kernel is pure profit. At 10 threads and up mine loses badly, 15
-to 19 times slower at 10 and up to 89 times slower at 32. With more threads than cores, some
-threads are not scheduled at all, and the threads that already arrived are spinning on the very
-cores those threads need in order to run and arrive.
+    The pathological case for mine is more threads than cores, because the threads that already
+arrived end up spinning on the exact cores the late threads need in order to run and arrive. For
+the pthread barrier it's the opposite, with a lot of short phases while threads still fit on
+cores, since you pay for the sleep and wake every single time even though the wait was brief.
 
-So the pathological case for mine is more threads than cores, along with unbalanced work where
-one slow thread makes everyone else burn a core waiting. I also saw mine become unstable at very
-low loop counts, swinging between roughly 900 and 74000 microseconds on the same configuration,
-which I believe is 8 threads hammering one spinlock with no work between rounds. The
-pathological case for the pthread barrier is the opposite, many short phases with threads
-fitting on cores, where the wait is brief but you pay for sleep and wake every time anyway.
+    Repeating the part 2 measurements with my own barrier, the trends match up to 8 threads and
+then split apart. At 100000 loops the pthread version levels off near 2.3 while mine peaks at 8
+threads and drops to 0.79 on 1k at 32, which is worse than not parallelizing at all. This occurs
+because past the core count the condition is either true or false rather than gradual, so at 9
+threads at least one barrier per round is waiting on a thread that isn't even scheduled.
 
-Parts 2 and 3 match up to 8 threads and diverge after, which is roughly what I expected. What I
-did not expect was how abrupt it is, going from 3 times faster at 8 threads to 18 times slower
-at 10. The condition is either true or false rather than gradual. At 8 threads every thread can
-run at once, and at 9 at least one cannot, so at least one barrier per round ends up waiting on
-a thread that is not even scheduled.
-
-As for why I fall short of ideal speedup, the work constant caps me at 2.67 before anything else
-goes wrong. After that, the top levels of the tree only have 4, then 2, then 1 active nodes, so
-most threads sit idle there but still have to reach the barrier. The rest is the 31 barrier
-crossings, thread creation and teardown, and cache traffic between threads writing to nearby
-slots.
-
-Mine would do better on a fine-grained loop with many short phases and threads set to the core
-count, on a machine nobody else is using. The pthread barrier would do better on anything
-oversubscribed, on a shared machine like Codio where the hypervisor can deschedule a CPU out
-from under you, on unbalanced work, and on coarse-grained work with long stretches between rare
-barriers.
+    As for the overheads, the work constant caps me at 2.67 before anything else goes wrong.
+After that it is the top levels of the tree only having 4, then 2, then 1 active nodes so most
+threads sit idle but still have to reach the barrier, plus the 31 barrier crossings and the
+thread creation and teardown.
 
 
 Insights
