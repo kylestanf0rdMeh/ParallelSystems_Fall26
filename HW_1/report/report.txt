@@ -5,66 +5,52 @@ Kyle Stanford
 
 Introduction
 
-This lab asked for a work-efficient parallel prefix scan in pthreads, measured with the library
-barrier and then with a barrier I wrote myself. All runs were on Codio, which reports 8 cores. I
-ran each configuration five times and kept the fastest, since the machine is shared and other
-users can only slow a run down.
+This lab asked me to deliver a work-efficient parallel prefix scan using pthreads and then
+measure it with the library barrier given to me, and then with a barrier I wrote myself. All the
+runs I executed were on Codio which reported 8 cores in the environment. I ran each of the
+configurations five times and kept the fastest run.
 
+To implement the deliverable, I used the tree-based scan from the GPU Gems resource that was
+recommended in the assignment links. We treat the array as a binary tree, where we walk up the
+combining pairs until the last index holds the total for the entire array. We set the root to
+zero, and our down-sweep walks back down, which pushes the partial sums into their place.
+Generally, each sweep does about n operator calls, so total work is O(n).
 
-Implementation
+That leaves an exclusive scan, so a third pass adds each input back into its own slot to make it
+inclusive. I pad the array up to a power of two with zeros, since zero is the identity for the
+operator and cannot change a real answer. Threads split the nodes active at each tree level,
+with a barrier after every level because the next level reads what the previous one wrote. My
+own barrier is a sense-reversing barrier on a pthread spinlock, where the last thread to arrive
+flips a shared atomic flag and everyone else spins on it. The sense reversal is what makes it
+safe to reuse, since consecutive rounds release on opposite values.
 
-I used the tree-based scan from the GPU Gems chapter the assignment links. The array is treated
-as a binary tree. An up-sweep walks up combining pairs until the last slot holds the total for
-the whole array. The root is set to zero and a down-sweep walks back down, pushing partial sums
-into place. Each sweep does about n operator calls, so total work is O(n).
-
-The sweeps give an exclusive scan, where each slot holds the sum of everything before it but not
-itself, so a third pass adds each input back into its own slot to make it inclusive. The tree
-needs a power-of-two length, so I pad with zeros, which is the identity for the operator and
-cannot change a real answer. All four supplied inputs are powers of two, so I made a
-1000-element input to test the padding.
-
-Threads split the nodes active at the current tree level, and there is a barrier after each
-level since the next level reads what the previous one wrote. A 16384-element run crosses 31
-barriers.
-
-One thing drives most of my results. The two sweeps plus the inclusive pass do roughly three
-times the operator calls the sequential loop does. The algorithm is work-efficient in the big-O
-sense, but the constant is 3, so on 8 cores my best possible speedup is about 8/3, or 2.67.
-
-For step 3 I wrote a sense-reversing barrier on a pthread spinlock. The spinlock protects a
-count of arrivals. The last thread to arrive resets the count and flips a shared atomic flag,
-and everyone else spins reading that flag. Sense reversal is what lets the barrier be reused:
-each thread keeps its own copy of the value it waits for and flips it on entry, so consecutive
-rounds release on opposite values. Without that, a fast thread could come back around and walk
-through a barrier on the previous round's flag.
-
-I checked correctness by diffing parallel output against the sequential path across five inputs
-and nine thread counts, with and without my barrier. All 45 cases matched.
+One detail drives most of my results. The two sweeps plus the inclusive pass do roughly three
+times the operator calls the sequential loop does, so even though the algorithm is O(n), my best
+possible speedup on 8 cores is about 8/3, or 2.67. I verified correctness by diffing parallel
+output against the sequential path across five inputs and nine thread counts, with and without
+my barrier. All 45 cases matched.
 
 
 Step 1 Discussion
 
 [GRAPH GOES HERE: speedup at -l 100000, pthread barrier]
 
-Speedup is sequential time divided by parallel time, so higher is better.
+Speedup here is sequential time divided by parallel time, so higher is better.
 
-Two threads are slower than sequential, at about 0.66. Speedup then climbs through 4, 6 and 8
-threads to roughly 2.1 to 2.3, then flattens around 2.2 to 2.5.
+Two threads come out slower than sequential at about 0.66. Speedup then climbs through 4, 6 and
+8 threads to roughly 2.1 to 2.3, and flattens around 2.2 to 2.5 after that.
 
-The first part surprised me until I did the arithmetic. The parallel version does three times
-the work, so two threads each doing 1.5 times the sequential work should be about 1.5 times
-slower. I measured 1.53, 1.50 and 1.51 on the three inputs. Getting the same number on three
-input sizes told me this was the work constant, not noise.
+The slowdown at two threads surprised me until I did the arithmetic. Since the parallel version
+does three times the work, two threads should land about 1.5 times slower, and I measured 1.53,
+1.50 and 1.51 on the three inputs. Getting the same number on three input sizes told me this was
+the work constant and not noise.
 
-The middle is ordinary scaling. Each thread splits the same 3n work further, so the curve rises
-on a shallower slope than ideal because it tracks p/3 instead of p.
-
-The flattening is the core count. With only 8 cores, extra threads add participants everyone
-waits for at every barrier without doing more work at once. My best was 2.47 against the ceiling
-of 2.67, so almost all of the gap to the ideal line is the work constant, not bad
-synchronization. Bigger inputs scale slightly better, 2.47 on 16k versus 2.24 on 1k, because
-work grows with n while barrier count only grows with log n.
+The climb is ordinary scaling, except the curve tracks p/3 instead of p, so it rises on a much
+shallower slope than the ideal line. The flattening is just the core count. With 8 cores, extra
+threads only add participants that everyone waits on at every barrier. My best was 2.47 against
+the ceiling of 2.67, so nearly all of the gap to ideal is the work constant rather than bad
+synchronization. Bigger inputs do slightly better, 2.47 on 16k against 2.24 on 1k, because work
+grows with n while barrier count only grows with log n.
 
 
 Step 2 Discussion
@@ -72,80 +58,72 @@ Step 2 Discussion
 [GRAPH GOES HERE: speedup at -l 10, pthread barrier]
 
 At 10 loops instead of 100000, the parallel version never wins at any thread count on any input.
-On 1k the sequential scan takes 23 microseconds and two threads take 804, 35 times slower. At 32
-threads it is 7637. The curve slopes down instead of flattening, so every thread added makes it
-worse.
+On 1k the sequential scan takes 23 microseconds while two threads take 804, and 32 threads take
+7637. The curve slopes downward instead of flattening, so every thread I add makes it worse.
 
-The useful work went away but the overhead did not. At 100000 loops each operator call is
-expensive enough that real computation dominates. At 10 loops a call is a few instructions, so
-scanning 1024 elements is only microseconds of work, and thread creation, 21 barrier crossings,
-and moving the array between core caches swamp it completely.
+The useful work disappeared but the overhead did not. At 10 loops an operator call is a few
+instructions, so scanning 1024 elements is only microseconds of real work, and thread creation
+plus 21 barrier crossings completely swamp it.
 
 [GRAPH GOES HERE: inflection point, sequential vs parallel as -l grows]
 
-Sweeping the loop count from 1 to 5000 at 8 threads, the crossover is near 2500 on 1k, near 300
-on 8k, and near 150 on 16k.
+Sweeping the loop count from 1 to 5000 at 8 threads, the crossover sits near 2500 on 1k, near
+300 on 8k, and near 150 on 16k.
 
 Changing this number flips the winner because it changes the work without changing the overhead.
-On 1k the parallel time barely moves between 1 loop and 100: 2563, 2532, 2428, 2513, 2275, 2315,
-2417 microseconds. Over the same range sequential goes from 5 to 297, tracking the loop count
-almost exactly. The parallel version sits on a floor of about 2500 microseconds made of thread
-startup and barriers, and pays it no matter how cheap the operator is. Bigger inputs cross
-earlier because they reach the same total work at a lower loop count.
+On 1k the parallel time barely moves between 1 loop and 100, staying around 2300 to 2600
+microseconds, while sequential climbs from 5 to 297 and tracks the loop count almost exactly.
+The parallel version is sitting on a fixed floor of roughly 2500 microseconds and pays it no
+matter how cheap the operator is. Bigger inputs cross earlier because they reach the same total
+work at a lower loop count.
 
-More generally, what matters is how expensive one operator call is compared to one barrier
-crossing. The loop count is just a convenient way to make operators of different cost. A real
-scan might combine large structs or do floating point work on vectors. Parallelizing pays when
-the work a thread does between two barriers is worth more than the barrier itself, so cheap
-operators lose and expensive ones win.
+More generally, what matters is the cost of one operator call compared to the cost of one
+barrier crossing. The loop count is just a convenient way to make operators of different
+expense, and a real scan might be combining large structs or doing floating point work instead.
+Parallelizing pays off when the work a thread does between two barriers is worth more than the
+barrier itself, so cheap operators lose and expensive ones win.
 
 
 Step 3 Discussion
 
 [GRAPH GOES HERE: speedup at -l 10, both barriers]
 
-Up to 8 threads my barrier matches the pthread barrier and is slightly better at 8. Past 8 they
-split apart. At 100000 loops the pthread version levels off near 2.3 and stays, while mine peaks
-at 8 and falls to 0.79 on 1k at 32 threads, worse than not parallelizing. The 10-loop graph
-shows it more sharply since barriers are basically the whole runtime there. Mine is about 3
-times faster up to 8 threads and then falls off a cliff between 8 and 10.
+Up to 8 threads my barrier matches the pthread barrier and is slightly better at 8. Past that
+they split apart. At 100000 loops the pthread version levels off near 2.3, while mine peaks at 8
+threads and falls to 0.79 on 1k at 32 threads, which is worse than not parallelizing at all. The
+10-loop graph shows it more sharply, since barriers are essentially the whole runtime there.
+Mine is about 3 times faster up to 8 threads and then falls off a cliff between 8 and 10.
 
-Structurally the two are similar. Both count arrivals and release everyone when the count hits
-the thread total, and both are reusable. The difference is what a waiting thread does. The
-pthread barrier puts early arrivers to sleep in the kernel and wakes them when the last thread
-shows up, so a waiting thread gives up its core, costing a system call and two context switches.
-Mine never sleeps. A waiting thread spins on one variable, so release takes about as long as
-moving a cache line between cores. The price is that the thread holds its core and does nothing
-with it.
+The two barriers are structurally similar, since both count arrivals and release everyone at the
+thread total. The difference is what a waiting thread does. The pthread barrier puts early
+arrivers to sleep in the kernel, so they give up their cores at the cost of a system call and
+two context switches. Mine never sleeps, so release is about as fast as moving a cache line, but
+the thread holds its core the entire time and does nothing with it.
 
-That tradeoff is what the numbers show. When threads fit on cores mine wins, because the wait is
-short and skipping the kernel is pure profit. At 10 threads and up mine loses badly, 15 to 19
-times slower at 10 and up to 89 times slower at 32. With more threads than cores some threads
-are not scheduled at all, and the threads that already arrived spin on the very cores those
-threads need in order to run and arrive, so every barrier costs a scheduler time slice instead
-of a cache line. The pthread barrier avoids this because sleeping threads hand their cores to
-threads that still have work to do.
+That tradeoff is exactly what the numbers show. When threads fit on cores mine wins, because the
+wait is short and skipping the kernel is pure profit. At 10 threads and up mine loses badly, 15
+to 19 times slower at 10 and up to 89 times slower at 32. With more threads than cores, some
+threads are not scheduled at all, and the threads that already arrived are spinning on the very
+cores those threads need in order to run and arrive.
 
-The pathological case for mine is therefore more threads than cores, and also unbalanced work
-where one slow thread makes everyone else burn a core waiting. I also saw mine get unstable at
-very low loop counts, swinging between roughly 900 and 74000 microseconds on the same
-configuration, which I think is 8 threads hammering one spinlock with no work between rounds.
-Because of that I used the pthread numbers for the step 2 crossover points. The pathological
-case for the pthread barrier is the opposite, many short phases with threads fitting on cores,
-where the wait is brief but you pay for sleep and wake anyway.
+So the pathological case for mine is more threads than cores, along with unbalanced work where
+one slow thread makes everyone else burn a core waiting. I also saw mine become unstable at very
+low loop counts, swinging between roughly 900 and 74000 microseconds on the same configuration,
+which I believe is 8 threads hammering one spinlock with no work between rounds. The
+pathological case for the pthread barrier is the opposite, many short phases with threads
+fitting on cores, where the wait is brief but you pay for sleep and wake every time anyway.
 
 Parts 2 and 3 match up to 8 threads and diverge after, which is roughly what I expected. What I
-did not expect was how abrupt it is. I assumed mine would degrade gradually past the core count,
-but it goes from about 3 times faster at 8 threads to about 18 times slower at 10. The condition
-is either true or false, not gradual. At 8 threads every thread can run at once. At 9 at least
-one cannot, so at least one barrier per round waits on a thread that is not scheduled while
-everyone else spins.
+did not expect was how abrupt it is, going from 3 times faster at 8 threads to 18 times slower
+at 10. The condition is either true or false rather than gradual. At 8 threads every thread can
+run at once, and at 9 at least one cannot, so at least one barrier per round ends up waiting on
+a thread that is not even scheduled.
 
-The work constant is the biggest reason I fall short of ideal speedup, capping me at 2.67 before
-anything else goes wrong. After that, the top levels of the tree have only 4, then 2, then 1
-active nodes, so most threads sit idle there while still having to reach the barrier. Then there
-are the 31 barrier crossings, thread creation and teardown, and cache traffic from threads
-writing to nearby slots.
+As for why I fall short of ideal speedup, the work constant caps me at 2.67 before anything else
+goes wrong. After that, the top levels of the tree only have 4, then 2, then 1 active nodes, so
+most threads sit idle there but still have to reach the barrier. The rest is the 31 barrier
+crossings, thread creation and teardown, and cache traffic between threads writing to nearby
+slots.
 
 Mine would do better on a fine-grained loop with many short phases and threads set to the core
 count, on a machine nobody else is using. The pthread barrier would do better on anything
@@ -156,11 +134,11 @@ barriers.
 
 Insights
 
-The main thing I took away is that work-efficient is a statement about big-O and the constant
-still decides what you actually measure. My scan is O(n) exactly as required and also does three
-times the work of the sequential loop, which is the difference between a ceiling of 8 and a
-ceiling of 2.67 on this machine. That one factor explains more of my graphs than anything about
-threads or barriers.
+The main thing I took away is that work-efficient is a statement about big-O, and the constant
+still decides what you actually measure. My scan is O(n) as required and also does three times
+the work of the sequential loop, which is the difference between a ceiling of 8 and a ceiling of
+2.67 on this machine. That single factor explains more of my graphs than anything about threads
+or barriers.
 
 The second is that spinning versus blocking is not a ranking, it depends on whether threads fit
 on cores. My barrier is three times better than the library's on one side of that line and
