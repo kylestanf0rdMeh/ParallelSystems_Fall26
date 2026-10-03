@@ -67,6 +67,13 @@ static void timer_free(struct gpu_timer *t)
     }
 }
 
+// the first cuda call in a process builds the device context, which costs a few hundred ms.
+// that is runtime startup rather than per iteration work, so it is paid before the clock starts.
+void kmeans_gpu_warmup()
+{
+    cuda_check(cudaFree(0), "warmup");
+}
+
 __global__ void assign_points(const double *points, const double *centroids, int *labels,
                               double *sums, int *counts, int n_points, int n_cluster, int dims)
 {
@@ -104,6 +111,72 @@ __global__ void assign_points(const double *points, const double *centroids, int
     }
 }
 
+__global__ void assign_points_shared(const double *points, const double *centroids, int *labels,
+                                     double *sums, int *counts, int n_points, int n_cluster,
+                                     int dims)
+{
+    extern __shared__ double shared[];
+    double *shared_centroids = shared;
+    double *shared_sums = shared + n_cluster * dims;
+    int *shared_counts = (int *)(shared + 2 * n_cluster * dims);
+
+    int entries = n_cluster * dims;
+
+    for (int i = threadIdx.x; i < entries; i += blockDim.x)
+    {
+        shared_centroids[i] = centroids[i];
+        shared_sums[i] = 0.0;
+    }
+    for (int c = threadIdx.x; c < n_cluster; c += blockDim.x)
+    {
+        shared_counts[c] = 0;
+    }
+    __syncthreads();
+
+    int p = blockIdx.x * blockDim.x + threadIdx.x;
+
+    // a thread past the end still has to reach both barriers, so only the work is masked
+    if (p < n_points)
+    {
+        const double *point = points + p * dims;
+
+        int best = 0;
+        double best_dist = 0.0;
+
+        for (int c = 0; c < n_cluster; c++)
+        {
+            double dist = 0.0;
+            for (int j = 0; j < dims; j++)
+            {
+                double diff = point[j] - shared_centroids[c * dims + j];
+                dist += diff * diff;
+            }
+            if (c == 0 || dist < best_dist)
+            {
+                best_dist = dist;
+                best = c;
+            }
+        }
+
+        labels[p] = best;
+        atomicAdd(&shared_counts[best], 1);
+        for (int j = 0; j < dims; j++)
+        {
+            atomicAdd(&shared_sums[best * dims + j], point[j]);
+        }
+    }
+    __syncthreads();
+
+    for (int i = threadIdx.x; i < entries; i += blockDim.x)
+    {
+        atomicAdd(&sums[i], shared_sums[i]);
+    }
+    for (int c = threadIdx.x; c < n_cluster; c += blockDim.x)
+    {
+        atomicAdd(&counts[c], shared_counts[c]);
+    }
+}
+
 __global__ void update_centroids(const double *sums, const int *counts, const double *old_centroids,
                                  double *new_centroids, int n_cluster, int dims)
 {
@@ -138,12 +211,34 @@ static double max_centroid_shift(const double *a, const double *b, int n_cluster
     return sqrt(worst);
 }
 
-void kmeans_cuda(const double *points, int n_points, double *centroids, int *labels,
-                 const struct options_t *opts, int *n_iter)
+static size_t shared_bytes_needed(int n_cluster, int dims)
+{
+    return 2 * (size_t)n_cluster * dims * sizeof(double) + (size_t)n_cluster * sizeof(int);
+}
+
+static void run_cuda(const double *points, int n_points, double *centroids, int *labels,
+                     const struct options_t *opts, int *n_iter, bool use_shared)
 {
     int k = opts->n_cluster;
     int dims = opts->dims;
     size_t centroid_bytes = k * dims * sizeof(double);
+    size_t shared_bytes = shared_bytes_needed(k, dims);
+
+    if (use_shared)
+    {
+        cudaDeviceProp prop;
+        cuda_check(cudaGetDeviceProperties(&prop, 0), "device properties");
+        if (shared_bytes > prop.sharedMemPerBlock)
+        {
+            // k by d is too wide for one block, so there is nothing to stage and we run the basic kernel
+            if (opts->verbose)
+            {
+                fprintf(stderr, "shared: need %zu bytes but the block limit is %zu, falling back\n",
+                        shared_bytes, prop.sharedMemPerBlock);
+            }
+            use_shared = false;
+        }
+    }
 
     struct gpu_timer transfer;
     struct gpu_timer kernel;
@@ -185,8 +280,17 @@ void kmeans_cuda(const double *points, int n_points, double *centroids, int *lab
         cudaMemset(d_sums, 0, centroid_bytes);
         cudaMemset(d_counts, 0, k * sizeof(int));
 
-        assign_points<<<assign_blocks, THREADS_PER_BLOCK>>>(d_points, d_centroids, d_labels,
-                                                            d_sums, d_counts, n_points, k, dims);
+        if (use_shared)
+        {
+            assign_points_shared<<<assign_blocks, THREADS_PER_BLOCK, shared_bytes>>>(
+                d_points, d_centroids, d_labels, d_sums, d_counts, n_points, k, dims);
+        }
+        else
+        {
+            assign_points<<<assign_blocks, THREADS_PER_BLOCK>>>(
+                d_points, d_centroids, d_labels, d_sums, d_counts, n_points, k, dims);
+        }
+
         update_centroids<<<update_blocks, THREADS_PER_BLOCK>>>(d_sums, d_counts, d_centroids,
                                                                d_new_centroids, k, dims);
         timer_stop(&kernel);
@@ -215,8 +319,8 @@ void kmeans_cuda(const double *points, int n_points, double *centroids, int *lab
 
     if (opts->verbose)
     {
-        fprintf(stderr, "cuda: %d iters, kernel %.3f ms, transfer %.3f ms\n",
-                iter, kernel.total_ms, transfer.total_ms);
+        fprintf(stderr, "%s: %d iters, kernel %.3f ms, transfer %.3f ms\n",
+                use_shared ? "shared" : "cuda", iter, kernel.total_ms, transfer.total_ms);
     }
 
     *n_iter = iter;
@@ -230,4 +334,16 @@ void kmeans_cuda(const double *points, int n_points, double *centroids, int *lab
     cudaFree(d_labels);
     timer_free(&transfer);
     timer_free(&kernel);
+}
+
+void kmeans_cuda(const double *points, int n_points, double *centroids, int *labels,
+                 const struct options_t *opts, int *n_iter)
+{
+    run_cuda(points, n_points, centroids, labels, opts, n_iter, false);
+}
+
+void kmeans_shared(const double *points, int n_points, double *centroids, int *labels,
+                   const struct options_t *opts, int *n_iter)
+{
+    run_cuda(points, n_points, centroids, labels, opts, n_iter, true);
 }

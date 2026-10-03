@@ -49,6 +49,11 @@ int main(int argc, char **argv)
 
     pick_initial_centroids(points, n_points, centroids, &opts);
 
+    if (opts.backend != BACKEND_SEQ)
+    {
+        kmeans_gpu_warmup();
+    }
+
     int n_iter = 0;
     auto start = std::chrono::high_resolution_clock::now();
 
@@ -60,6 +65,9 @@ int main(int argc, char **argv)
     case BACKEND_CUDA:
         kmeans_cuda(points, n_points, centroids, labels, &opts, &n_iter);
         break;
+    case BACKEND_SHARED:
+        kmeans_shared(points, n_points, centroids, labels, &opts, &n_iter);
+        break;
     default:
         std::cerr << "that backend is not implemented yet" << std::endl;
         exit(1);
@@ -69,6 +77,11 @@ int main(int argc, char **argv)
     double elapsed_ms = std::chrono::duration<double, std::milli>(end - start).count();
 
     printf("%d,%lf\n", n_iter, elapsed_ms / n_iter);
+
+    if (opts.verbose)
+    {
+        fprintf(stderr, "solve: %.3f ms total over %d iterations\n", elapsed_ms, n_iter);
+    }
 
     if (opts.print_centroids)
     {
