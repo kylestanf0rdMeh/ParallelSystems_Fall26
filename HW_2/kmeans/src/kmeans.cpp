@@ -57,6 +57,9 @@ int main(int argc, char **argv)
     case BACKEND_SEQ:
         kmeans_seq(points, n_points, centroids, labels, &opts, &n_iter);
         break;
+    case BACKEND_CUDA:
+        kmeans_cuda(points, n_points, centroids, labels, &opts, &n_iter);
+        break;
     default:
         std::cerr << "that backend is not implemented yet" << std::endl;
         exit(1);
