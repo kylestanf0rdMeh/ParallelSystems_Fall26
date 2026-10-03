@@ -1,0 +1,201 @@
+
+<!-- saved from url=(0097)https://www.cs.utexas.edu/~rossbach/cs380p/lab/kmeans/workspace/gpu-kmeans-submission-cs380p.html -->
+<html><head><meta http-equiv="Content-Type" content="text/html; charset=windows-1252"></head><body><h1 id="cs380p-parallel-systems">CS380P: Parallel Systems</h1>
+<h1 id="lab-2-kmeans-with-cuda">Lab #2: KMeans with CUDA</h1>
+<h1 id="submission-guide">Submission Guide</h1>
+<p>In this lab, you will experiment with different implementations of the Kmeans algorithm. 
+<!--All your implementations (source code and Makefiles) should be organized in the ~/workspace directory, which should be the same directory where you see this guide.</p>-->
+
+</p><p>Among the files you have to tar and submit, one file required by our autograder is the <code>submit</code> file. It does <b>not</b> have an extension (e.g. .txt), so just call it <code>submit</code></p>
+<p>This file contains instructions on how to compile each variant of your code, where the binary will be located and, if your code requires, any extra arguments</p>
+<p>A template <a href="http://www.cs.utexas.edu/~rossbach/cs380p/lab/kmeans/workspace/submit">submit</a> file is provided. 
+  Please read the instructions carefully because the autograder relies on this submit file to grade your implementations.</p>
+<p>Do not rename the submit file.</p>
+<p>As an example, the Sequential part of your submit file could look something like this, assuming you are compiling the binaries in a folder called bin
+and you are going to have one binary per implementation (one for cpu, one for CUDA, etc.):
+</p>
+
+<pre>[Sequential]
+How_To_Compile: gcc main.c kmeans_cpu.c -O2 -o bin/kmeans_cpu
+Executable: bin/kmeans_cpu
+Extra_Args:
+</pre>
+
+<p>You could also have just one application with all implementations, and switch which should execute using arguments (which you should implement
+yourself, feel free to reuse code from lab 1), for example:</p>
+
+<pre>[Sequential]
+How_To_Compile: nvcc main.cpp kmeans_cpu.cpp kmeans_cuda.cu kmeans_thrust.cpp -O2 -o kmeans
+Executable: kmeans
+Extra_Args: --use_cpu
+</pre>
+
+<!--<p>Your entire workspace will be downloaded and graded locally on the TA's machine. 
+  The whole CUDA toolchain is setup in this project and <code>nvcc</code> is added to the <code>$PATH</code> so that you can invoke <code>nvcc</code> directly. 
+  You should assume the same environment on the TA's local machine, which means you should not specify full path for <code>nvcc</code>.</p>-->
+
+<h1 id="inputs">1. Inputs</h1>
+<p>In this lab, you can start to test your Kmeans implementations with the following 3 sets of multi-dimensional points. The dimensions of the points in each set are known. However, your program should accept the dimension of points as one of the command line arguments.</p>
+<p><a href="http://www.cs.utexas.edu/~rossbach/cs380p/lab/kmeans-sample-inputs/random-n2048-d16-c16.txt">random-n2048-d16-c16.txt</a></p>
+<p><a href="http://www.cs.utexas.edu/~rossbach/cs380p/lab/kmeans-sample-inputs/random-n16384-d24-c16.txt">random-n16384-d24-c16.txt</a></p>
+<p><a href="http://www.cs.utexas.edu/~rossbach/cs380p/lab/kmeans-sample-inputs/random-n65536-d32-c16.txt">random-n65536-d32-c16.txt</a></p>
+<p>Note that the autograder will use different inputs (different dims and number of points) to test your program. However, sample solutions for the above inputs can be found at the links below. Note that concerns like floating point associativity will mean that your answers can be different, so checking correctness requires verifying that answers are within a small epsilon (e.g. 10^-4) in each dimension of each point. Also, your answer need not produce the same order of centers or IDs, so again, make sure your own correctness checking does not assume a particular order of centers in the output. These outputs were generated with the seed: <code>-s 8675309</code> (see the section about Random Initial Centroids Generation below).</p>
+<p><a href="http://www.cs.utexas.edu/~rossbach/cs380p/lab/kmeans-sample-inputs/random-n2048-d16-c16-answer.txt">random-n2048-d16-c16-answer.txt</a></p>
+<p><a href="http://www.cs.utexas.edu/~rossbach/cs380p/lab/kmeans-sample-inputs/random-n16384-d24-c16-answer.txt">random-n16384-d24-c16-answer.txt</a></p>
+<p><a href="http://www.cs.utexas.edu/~rossbach/cs380p/lab/kmeans-sample-inputs/random-n65536-d32-c16-answer.txt">random-n65536-d32-c16-answer.txt</a></p>
+
+<p>Students are encouraged to share newly generated inputs and their respective solutions, calculated by their implementation of kmeans, 
+on Piazza for other students to compare. Just don't share code.</p>
+
+<h2 id="cmdline-arguments">1.1 CmdLine Arguments</h2>
+<p>For all your implementations, your program should at least accept the following arguments</p>
+<ul>
+<li><code>-k num_cluster</code>: an integer specifying the number of clusters</li>
+<li><code>-d dims</code>: an integer specifying the dimension of the points</li>
+<li><code>-i inputfilename</code>: a string specifying the input filename</li>
+<li><code>-m max_num_iter</code>: an integer specifying the maximum number of iterations</li>
+<li><code>-t threshold</code>: a double specifying the threshold for convergence test.</li>
+<li><code>-c</code>: a flag to control the output of your program. If <code>-c</code> is specified, your program should output the centroids of all clusters. If <code>-c</code> is not specified, your program should output the labels of all points. See details below.</li>
+<li><code>-s seed</code>: an integer specifying the seed for rand(). This is used by the autograder to simplify the correctness checking process. See details below.</li>
+</ul>
+<p>Your program can also accept more arguments to control the behavior of your program for different implementations. These extra arguments can be specified in the <code>submit</code> file. Refer to the instruction in <code>submit</code> file for more details.</p>
+<p><code>-k</code>, <code>-d</code>, and <code>-i</code> should depend on the input files. The max number of iterations <code>-m</code> is used to prevent your program from an infinite loop if something goes wrong. In general, your implementation is expected to converge within 150 iterations. Therefore, an value of 150 to <code>-m</code> should be good enough. Depending on your methods for convergence test, you might want to use different thresholds <code>-t</code> for different implementations. As a reference, the threshold for comparing centers without any non-determinism issues can be as small as <code>10^-10</code>. However, for comparing centers with non-determinism issues, you might want to use a threshold of <code>10^-6</code>. The autograder will specify <code>-t 10^-5</code> for all implementations.</p>
+<h1 id="output">2. Output</h1>
+<p>For each input, each implementation is asked to classify the points into <code>k</code> clusters. You should measure the elapsed time and total number of iterations for Kmeans to converge. The averaged elapsed time per iteration and the number of iterations to converge should be written to STDOUT in the following form</p>
+<div class="sourceCode"><pre class="sourceCode c"><code class="sourceCode c">printf(<span class="st">"%d,%lf</span><span class="ch">\n</span><span class="st">"</span>, iter_to_converge, time_per_iter_in_ms)</code></pre></div>
+<p>Note that the time should be measured in milliseconds. Part of your grade will be based on how fast your implementation is.</p>
+<h2 id="points-labels">2.1 Points Labels</h2>
+<p>If <code>-c</code> is not specified to your program, it needs to write points assignment, i.e. the final cluster id for each point, to STDOUT in the following form</p>
+<div class="sourceCode"><pre class="sourceCode c"><code class="sourceCode c">printf(<span class="st">"clusters:"</span>)
+<span class="kw">for</span> (<span class="dt">int</span> p=<span class="dv">0</span>; p &lt; nPoints; p++)
+    printf(<span class="st">" %d"</span>, clusterId_of_point[p]);</code></pre></div>
+<p>The autograder will redirect your output to a temp file, which will be further processed to check correctness.</p>
+<h3 id="correctness-of-output">2.1.1 Correctness of Output</h3>
+<p>To check the correctness of the output, the autograder will do the following</p>
+<ol style="list-style-type: decimal">
+<li>Compute the centroid of each cluster given by the points assignment.</li>
+<li>For each point, select the cluster centroid that is closest to the point.</li>
+<li>Compute the distance between the point and the selected centroid. Let the result be <code>dis0</code>.</li>
+<li>Compute the distance between the point and the centroid of its assigned cluster. Let the result be <code>dis1</code>.</li>
+<li>If the difference between <code>dis0</code> and <code>dis1</code> is larger than a threshold, this point is considered to be a <em>wrong point</em>. Your grade will be based on the total number of wrong points.</li>
+</ol>
+<h2 id="centroids-of-all-clusters">2.2 Centroids of All Clusters</h2>
+<p>if <code>-c</code> is specified, your program should output the centroids of final clusters in the following form</p>
+<div class="sourceCode"><pre class="sourceCode c"><code class="sourceCode c"><span class="kw">for</span> (<span class="dt">int</span> clusterId = <span class="dv">0</span>; clusterId &lt; _k; clusterId ++){
+  printf(<span class="st">"%d "</span>, clusterId);
+  <span class="kw">for</span> (<span class="dt">int</span> d = <span class="dv">0</span>; d &lt; _d; d++)
+    printf(<span class="st">"%lf "</span>, centers[clusterId + d * _k]);
+  printf(<span class="st">"</span><span class="ch">\n</span><span class="st">"</span>);
+}</code></pre></div>
+<p>Note that the first column is the cluster id.</p>
+<h3 id="random-initial-centroids-generation">2.2.1 Random Initial Centroids Generation</h3>
+<p>At the beginning of the kmeans algorithm, <code>k</code> points should be randomly chosen as the initial set of centroids. Since the final set of centroids depends heavily on the initial set of centroids, the autograder will specify the <code>seed</code> for random number generation so that your final set of centroids will be compared with the set of centroids using the same initial set of centroids.</p>
+<p>Specifically, your program should use the <code>seed</code> provided by the cmdline argument to randomly generate <code>k</code> integer numbers between 0 and <code>num_points</code> and use these <code>k</code> integers as indices of points used as initial centroids.</p>
+<p>E.g.</p>
+<div class="sourceCode"><pre class="sourceCode c"><code class="sourceCode c"><span class="dt">static</span> <span class="dt">unsigned</span> <span class="dt">long</span> <span class="dt">int</span> next = <span class="dv">1</span>;
+<span class="dt">static</span> <span class="dt">unsigned</span> <span class="dt">long</span> kmeans_rmax = <span class="dv">32767</span>;
+<span class="dt">int</span> kmeans_rand() {
+    next = next * <span class="dv">1103515245</span> + <span class="dv">12345</span>;
+    <span class="kw">return</span> (<span class="dt">unsigned</span> <span class="dt">int</span>)(next/<span class="dv">65536</span>) % (kmeans_rmax<span class="dv">+1</span>);
+}
+<span class="dt">void</span> kmeans_srand(<span class="dt">unsigned</span> <span class="dt">int</span> seed) {
+    next = seed;
+}
+kmeans_srand(cmd_seed); <span class="co">// cmd_seed is a cmdline arg</span>
+<span class="kw">for</span> (<span class="dt">int</span> i=<span class="dv">0</span>; i&lt;k; i++){
+    <span class="dt">int</span> index = kmeans_rand() % _numpoints;
+    <span class="co">// you should use the proper implementation of the following</span>
+    <span class="co">// code according to your data structure</span>
+    centers[i] = points[index];
+}</code></pre></div>
+<p>Standard random number generators (like rand()) can differ accross platforms even when given the same seed. To make sure your starting centroids are consistent please use the <code>kmeans_rand</code> and <code>kmeans_srand</code> functions as they are written here.</p>
+<h3 id="correctness-of-output-1">2.2.2 Correctness of Output</h3>
+<p>The autograder will compare your centroids, refered to as <code>iCenters</code> to the centroids computed by MATLAB, referred to as <code>refCenters</code> according to the following steps</p>
+<ol style="list-style-type: decimal">
+<li>Map each centroid in <code>iCenters</code> to its closest centroid in <code>refCenters</code> using the Euclidean distance.</li>
+<li>If more than one centroids in <code>iCenters</code> are mapped to the same centroid, say <code>refC0</code>, in <code>refCenters</code>, one of the centroids, say <code>iC</code>, will be forced to map to another centroid, say <code>refC1</code> in <code>refCenters</code> such that <code>refC1</code> is the closest centroid to <code>iC</code> that has a longer distance to <code>iC</code> than that from <code>refC0</code> to <code>iC</code>.</li>
+<li>Repeat step 2 until no more than one centroid in <code>iCenters</code> are mapped to the same centroid in <code>refCenters</code>.</li>
+<li>Compare the distance between each centroid in <code>iCenters</code> with its mapped centroid in <code>refCenters</code> with a threshold. If the distance is larger than the threshold, the centroid in <code>iCenters</code> is considered to be a <em>wrong centroid</em>. Your grade will be based on the number of wrong centers.</li>
+</ol>
+<p>Note that there are three ways to pick <code>iC</code> in step 2: <code>Cur</code>, <code>Min</code>, and <code>Max</code>.</p>
+<ul>
+<li><code>Cur</code>: the centroid with the largest centroid id will be forced to remap.</li>
+<li><code>Min</code>: the centroid that has the shortest distance to <code>refC0</code> will be forced to remap.</li>
+<li><code>Max</code>: the centroid that has the largest distance to <code>refC0</code> will be forced to remap.</li>
+</ul>
+<p>The autograder will use all these strategies and choose the one with the fewest unmatched centroids.</p>
+<p>Essentially, what this means is that we will generate the solution to an input file using our own code, then, for each centroid of our
+solution, we will find the centroid of the student's solution that is closest to it. Repeat for all centroids.
+Then we calculate the distance difference (error) of all these pair of centroids. Pairs that are too
+far (above a threshold) are considered wrong.</p>
+
+<h1 id="implementations-hints">3. Implementations Hints</h1>
+<h2 id="seq-----sequential-cpu-implementation">3.1 Seq --- Sequential CPU Implementation</h2>
+<p>You should figure out a convergence criterion for the algorithm to stop. The convergence check should be done at the end of every iteration and this should be included in the elapsed time.</p>
+
+
+<h2 id="cuda_basic-----basic-cuda-implementation">3.2 CUDA_Basic --- Basic CUDA Implementation</h2>
+<h3 id="organization-of-files">3.2.1 Organization of files</h3>
+<p>The main goal of this step is to write a working CUDA program from scratch. There are different ways to organize your codes and here is one example:</p>
+<ul>
+<li>Put all your CUDA kernels in kmeans_kernel.cu. You may need several kernels to implement the Kmeans algorithm because kernels provide global synchronization among all threads.</li>
+<li>Write a wrapper function that sets up kernel launch configurations, calls the CUDA kernels to perform one iteration of computation, and checks if the algorithm has converged. Note that you can have different wrapper functions, which represent different optimizations over the basic implementation. Put all wrapper functions in kmeans_kernel.cu as well. If you use extra command line argument to control which Kmeans to run, remember to specify the command in the <code>submit</code> file.</li>
+<li>Put the main function in kmeans.cpp, in which the input file is read, centroids are initialized, host and device pointers are allocated, and most importantly, one of the wrapper functions are called to start one particular version of Kmeans implementation.</li>
+<li>All the wrapper functions can be declared in kmeans.h, which is #included in both kmeans_kernel.cu and kmeans.cpp.</li>
+<li><p>To compile your code, you need to do the following</p>
+<div class="sourceCode"><pre class="sourceCode gcc"><code class="sourceCode gcc">  nvcc -o kmeans.o -c kmeans.cpp
+  nvcc -o kmeans_kernel.o -c kmeans_kernel.cu
+  nvcc -o kmeans kmeans.o kmeans_kernel.o</code></pre></div></li>
+</ul>
+<h3 id="time-measurement">3.2.2 Time measurement</h3>
+<p>To measure elapsed time of CUDA kernels, you will find that the <code>cudaEvent_t</code> API is key to doing this accurately. A good overview of how to use it to measure performance can be found <a href="https://devblogs.nvidia.com/how-implement-performance-metrics-cuda-cc/">here</a>.</p>
+<h3 id="non-determinism-with-atomicadd">3.2.3 Non-determinism with <code>atomicAdd</code></h3>
+<p>If <code>atomicAdd</code> is used by each CUDA thread to compute the aggregation, you should expect the number of iterations for the algorithm to converge becomes non-deterministic, i.e. every time you run the program, it stops at a different number of iteration even though every time it starts with the same initial centroids. This is because floating point number arithmetic is affected by the order of the computation. The use of <code>atomicAdd</code> makes the order non-deterministic, hence the result of the computation. A direct consequence of this non-determinism is when you compute the centroid of a group of points, every time you can have a different result (if your threshold is relatively small) even the group of points does not change. Therefore, a relatively larger (10X the threshold used for sequential implementation) might be used for convergence test. Or you can use other convergence tests which do not involve comparing centroids.</p>
+
+<h2 id="cuda_shmem-----cuda-implementation-with-shared-memory">3.3 CUDA_Shmem --- CUDA Implementation with Shared Memory</h2>
+<p>Shared memory can be used to reduce the number of global memory accesses. The common pattern to use shared memory is as follows</p>
+<pre class="cuda"><code>load data from gmem to shmem 
+__syncthreads();
+update shmem
+__syncthreads();
+store data from shmem to gmem</code></pre>
+<p>It is very easy to make mistakes when you do not need all threads to load and store the data but need them all to update the data in shmem. This happens when the total number of threads does not match the number of tasks (such as points). Be careful when you try to mask some threads when using shared memory.</p>
+
+<h2 id="thrust-----parallel-gpu-implementation-using-thrust">3.4 Thrust --- Parallel GPU Implementation using Thrust</h2>
+<p>K-Means can be decomposed as a GroupBy-Aggregate, which can be implemented relatively easily in CUDA using <code>thrust::</code> primitives. The advantage of Thrust over CUDA implementation is that you are working on the algorithm level. The main work will be how to represent the Kmeans algorithm with a combination of Thrust implemented algorithms. You do not need to worry about data (de)allocation/copy and work assignment for each CUDA thread.</p>
+<p>The performance of the Thrust implementation may not be as good as the CUDA implementation. But it should still be faster than the sequential implementation.</p>
+
+<p>This is the hardest part to implement, so we suggest you leave it as the last part.</p>
+<p>Some of the Thrust APIs you should look into are: <code>thrust::for_each</code>, <code>thrust::stable_sort_by_key</code>, <code>thrust::reduce_by_key</code>, <code>thrust::transform</code>, <code>thrust::upper_bound</code></p>
+<p>For this implementation, you will probably have to store more information than the previous ones. For example, while in CUDA you can use the index of an array
+to identify it (e.g. index 0 means centroid 0), in Thrust you might want to create an array to store the indices: have an array called centroids and a sequenced index array
+for each centroid. This simplifies iterating through every centroid since APIs like for_each take a start and end iterator argument. The API <code>thrust::sequence</code> makes creating this trivial.
+</p>
+<p>Before writing code, you should understand what <code>functors</code> are. Functors are where your own code will be implemented, and Thrust will simply map this functor
+to all the elements of an iterators. For example, you will probably need a functor for finding the nearest centroid, and apply this for each point in your input.</p>
+
+
+<h2 id="writeup-----writeup">4 --- Your report</h2>
+  You should include a report that answers the following questions.
+  In cases where we ask you to explain performance behavior, it is fine
+  to speculate, but be clear whether your observations are empirical
+  or speculation.
+  <ul>
+    <li>Report the GPU hardware details, CPU hardware details,
+      and OS version on the machine where you did your measurements if you measured in 
+	  any environment other than Codio; if 
+	  you just used Codio for measurements, it's fine to just report that fact. </li>
+    <li>Which of your implementations is fastest? Does it match
+      your expectations of which should be fastest? Estimate the
+      best-case performance speedup your CUDA implementations should
+      have based on the number of threads in your program and the number
+      of processing contexts actually supported by your hardware. How far
+      of that prediction is your best-case performance? </li>
+    <li>Which of the parallel implementations is slowest, and does
+      it match your expectations? Why or why not?</li>
+    <li>What fraction of the end-to-end runtime in your CUDA versions
+      is spent in data transfer?</li>
+    <li>How much time did you spend on the lab?</li>
+  </ul>
+      
+</body></html>
