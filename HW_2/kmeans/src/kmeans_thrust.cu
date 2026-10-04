@@ -51,30 +51,47 @@ struct nearest_centroid {
     }
 };
 
-// one key per point per dimension. the labels arrive sorted and the dimension is the minor
-// index, so the expanded keys come out sorted too and reduce_by_key needs no second sort.
+// one key per point per dimension, laid out dimension major so the keys come out sorted:
+// within a dimension the labels are already ascending, and dimension j+1 starts at (j+1)*k,
+// which is above every key in block j. that is what lets reduce_by_key run without a resort.
 struct expand_key {
     const int *sorted_labels;
-    int dims;
+    int n_points;
+    int n_cluster;
 
-    expand_key(const int *l, int d) : sorted_labels(l), dims(d) {}
+    expand_key(const int *l, int n, int k) : sorted_labels(l), n_points(n), n_cluster(k) {}
 
     __device__ int operator()(int i) const
     {
-        return sorted_labels[i / dims] * dims + (i % dims);
+        return (i / n_points) * n_cluster + sorted_labels[i % n_points];
     }
 };
 
 struct gather_value {
     const double *points;
     const int *order;
+    int n_points;
     int dims;
 
-    gather_value(const double *p, const int *o, int d) : points(p), order(o), dims(d) {}
+    gather_value(const double *p, const int *o, int n, int d)
+        : points(p), order(o), n_points(n), dims(d) {}
 
     __device__ double operator()(int i) const
     {
-        return points[order[i / dims] * dims + (i % dims)];
+        return points[order[i % n_points] * dims + (i / n_points)];
+    }
+};
+
+// reduce_by_key hands back j*k+c, but the centroid buffer is indexed c*dims+j
+struct key_to_slot {
+    int n_cluster;
+    int dims;
+
+    key_to_slot(int k, int d) : n_cluster(k), dims(d) {}
+
+    __device__ int operator()(int key) const
+    {
+        return (key % n_cluster) * dims + (key / n_cluster);
     }
 };
 
@@ -169,15 +186,18 @@ void kmeans_thrust(const double *points, int n_points, double *centroids, int *l
         thrust::stable_sort_by_key(d_sorted_labels.begin(), d_sorted_labels.end(),
                                    d_order.begin());
 
-        thrust::transform(first, first + expanded, d_keys.begin(), expand_key(sorted_ptr, dims));
+        thrust::transform(first, first + expanded, d_keys.begin(),
+                          expand_key(sorted_ptr, n_points, k));
         thrust::transform(first, first + expanded, d_values.begin(),
-                          gather_value(points_ptr, order_ptr, dims));
+                          gather_value(points_ptr, order_ptr, n_points, dims));
 
         thrust::pair<thrust::device_vector<int>::iterator,
                      thrust::device_vector<double>::iterator> sum_end =
             thrust::reduce_by_key(d_keys.begin(), d_keys.end(), d_values.begin(),
                                   d_sum_keys.begin(), d_sum_values.begin());
         int n_sums = sum_end.first - d_sum_keys.begin();
+        thrust::transform(d_sum_keys.begin(), d_sum_keys.begin() + n_sums, d_sum_keys.begin(),
+                          key_to_slot(k, dims));
 
         thrust::pair<thrust::device_vector<int>::iterator,
                      thrust::device_vector<int>::iterator> count_end =
