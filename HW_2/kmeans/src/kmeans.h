@@ -14,4 +14,7 @@ void kmeans_cuda(const double *points, int n_points, double *centroids, int *lab
 void kmeans_shared(const double *points, int n_points, double *centroids, int *labels,
                    const struct options_t *opts, int *n_iter);
 
+void kmeans_thrust(const double *points, int n_points, double *centroids, int *labels,
+                   const struct options_t *opts, int *n_iter);
+
 #endif

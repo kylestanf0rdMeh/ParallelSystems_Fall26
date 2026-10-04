@@ -1,4 +1,5 @@
 #include "kmeans.h"
+#include "cuda_util.h"
 
 #include <cmath>
 #include <cstdio>
@@ -7,70 +8,16 @@
 
 #define THREADS_PER_BLOCK 256
 
-static void cuda_check(cudaError_t err, const char *what)
-{
-    if (err != cudaSuccess)
-    {
-        fprintf(stderr, "%s: %s\n", what, cudaGetErrorString(err));
-        exit(1);
-    }
-}
+static size_t shared_mem_per_block = 0;
 
-// events are only recorded under --verbose, so the graded timing path pays nothing for them
-struct gpu_timer {
-    bool enabled;
-    cudaEvent_t start_event;
-    cudaEvent_t stop_event;
-    double total_ms;
-};
-
-static void timer_init(struct gpu_timer *t, bool enabled)
-{
-    t->enabled = enabled;
-    t->total_ms = 0.0;
-    if (enabled)
-    {
-        cudaEventCreate(&t->start_event);
-        cudaEventCreate(&t->stop_event);
-    }
-}
-
-static void timer_start(struct gpu_timer *t)
-{
-    if (t->enabled)
-    {
-        cudaEventRecord(t->start_event);
-    }
-}
-
-static void timer_stop(struct gpu_timer *t)
-{
-    if (!t->enabled)
-    {
-        return;
-    }
-
-    cudaEventRecord(t->stop_event);
-    cudaEventSynchronize(t->stop_event);
-
-    float ms = 0.0f;
-    cudaEventElapsedTime(&ms, t->start_event, t->stop_event);
-    t->total_ms += ms;
-}
-
-static void timer_free(struct gpu_timer *t)
-{
-    if (t->enabled)
-    {
-        cudaEventDestroy(t->start_event);
-        cudaEventDestroy(t->stop_event);
-    }
-}
-
-// the first cuda call in a process builds the device context, which costs a few hundred ms.
-// that is runtime startup rather than per iteration work, so it is paid before the clock starts.
+// the first cuda call in a process builds the device context, which costs a few hundred ms,
+// and querying the device properties is slow in its own right. both are runtime startup
+// rather than per iteration work, so they are paid before the clock starts.
 void kmeans_gpu_warmup()
 {
+    cudaDeviceProp prop;
+    cuda_check(cudaGetDeviceProperties(&prop, 0), "device properties");
+    shared_mem_per_block = prop.sharedMemPerBlock;
     cuda_check(cudaFree(0), "warmup");
 }
 
@@ -224,20 +171,15 @@ static void run_cuda(const double *points, int n_points, double *centroids, int 
     size_t centroid_bytes = k * dims * sizeof(double);
     size_t shared_bytes = shared_bytes_needed(k, dims);
 
-    if (use_shared)
+    if (use_shared && shared_bytes > shared_mem_per_block)
     {
-        cudaDeviceProp prop;
-        cuda_check(cudaGetDeviceProperties(&prop, 0), "device properties");
-        if (shared_bytes > prop.sharedMemPerBlock)
+        // k by d is too wide for one block, so there is nothing to stage and we run the basic kernel
+        if (opts->verbose)
         {
-            // k by d is too wide for one block, so there is nothing to stage and we run the basic kernel
-            if (opts->verbose)
-            {
-                fprintf(stderr, "shared: need %zu bytes but the block limit is %zu, falling back\n",
-                        shared_bytes, prop.sharedMemPerBlock);
-            }
-            use_shared = false;
+            fprintf(stderr, "shared: need %zu bytes but the block limit is %zu, falling back\n",
+                    shared_bytes, shared_mem_per_block);
         }
+        use_shared = false;
     }
 
     struct gpu_timer transfer;

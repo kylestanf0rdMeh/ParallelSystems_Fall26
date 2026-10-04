@@ -68,9 +68,9 @@ int main(int argc, char **argv)
     case BACKEND_SHARED:
         kmeans_shared(points, n_points, centroids, labels, &opts, &n_iter);
         break;
-    default:
-        std::cerr << "that backend is not implemented yet" << std::endl;
-        exit(1);
+    case BACKEND_THRUST:
+        kmeans_thrust(points, n_points, centroids, labels, &opts, &n_iter);
+        break;
     }
 
     auto end = std::chrono::high_resolution_clock::now();
