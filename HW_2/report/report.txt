@@ -1,0 +1,155 @@
+CS380P Lab 2: KMeans with CUDA
+
+Kyle Stanford
+
+
+Introduction
+
+This lab asked me to solve k-means four ways, once on the CPU and three times on the GPU, and
+then compare them. All four share one argument parser, one input reader, one copy of the
+kmeans_rand seeding routine and one clock, so the numbers below come off the same code path and
+differ only in how an iteration is computed. One binary picks the implementation with --alg.
+Everything was measured on Codio. I ran each configuration five times and kept the fastest run.
+
+The sequential version is plain Lloyd's. The basic CUDA version runs one thread per point, has
+each thread scan all k centroids for the nearest, and then atomically adds the point into a
+global sum buffer. The shared memory version does the same work but stages the centroids and a
+per block sum and count buffer in shared memory, so the global atomics drop from one per point
+per dimension to one per block per entry. The Thrust version expresses the iteration as a group
+by aggregate: sort the point indices by label, expand to one key per point per dimension, then
+reduce_by_key for the sums and a second reduce_by_key for the counts.
+
+I checked correctness two ways. I compared centroids against the published answer files with a
+matcher that pairs each of my centroids to its nearest unused reference centroid, so it does not
+assume an ordering, and I separately compared each GPU version against my own sequential output
+on the same input. All twelve combinations pass inside 1e-4. Every GPU version actually
+reproduces the sequential centroids exactly at the six decimals the output format prints, and
+all four converge in the same number of iterations, 18, 15 and 14 on the three inputs.
+
+One measurement decision is worth stating up front. The first CUDA call in a process builds the
+device context, which costs about 290 milliseconds here. I pay that before the clock starts.
+Everything else is inside the timed region: device allocation, every host to device and device
+to host copy, every kernel launch, and the convergence test. Before I made that change every GPU
+run reported roughly 300 milliseconds total whether the input had 2048 points or 65536, because
+the fixed startup cost swamped the real work and then got divided across a dozen iterations.
+
+
+Hardware and environment
+
+The assignment says reporting Codio is enough on its own, but the details matter for the
+estimate below, so I am listing them.
+
+The GPU is one Tesla T4, compute capability 7.5, with 40 SMs, 2560 CUDA cores, 1024 resident
+threads per SM for 40960 thread contexts, 16 GB of memory at 320 GB/s, and 48 KB of shared
+memory per block. Its double precision rate is a thirty second of its single precision rate,
+which works out to 80 lanes that can issue a double precision operation per clock. The CPU is an
+Intel Xeon Platinum 8259CL, 2.50 GHz base and observed at 3.10 GHz, with 4 cores and 8 hardware
+threads. The OS is Ubuntu 18.04.2 LTS and the toolkit is CUDA 10.1.168.
+
+Two environment facts shaped the code. The toolkit defaults to sm_30, which is below the 6.0
+floor for atomicAdd on double, so the build has to name an architecture explicitly. And the GPU
+is shared, with about 13.9 of its 15.4 GB already held by another tenant while I was measuring,
+which is why I take the best of five runs instead of an average.
+
+
+Which implementation is fastest
+
+[GRAPH GOES HERE: speedup.png]
+
+Speedup here is sequential time divided by parallel time, so higher is better.
+
+The basic CUDA version is fastest on every input, at 4.2, 14.9 and 14.5 times sequential. Shared
+memory follows at 3.3, 12.9 and 12.1, and Thrust is last at 1.4, 7.4 and 8.8.
+
+That the basic version wins does not match what I expected. I expected shared memory to win,
+since cutting global memory traffic is the whole point of section 3.3, and it does cut the global
+atomics on the largest input from about 2.16 million per iteration to about 135 thousand. It
+loses anyway by 10 to 20 percent. My reading is that the atomics were never the bottleneck, so
+the savings buy nothing while the extra work is real: the block has to zero the accumulator,
+copy the centroids in, cross two barriers, and flush k times d atomics at the end. Paying that
+to optimize something that was not the limit is a net loss.
+
+For the best case prediction, my assignment kernel launches one thread per point, so 65536
+threads on the largest input, and the T4 supports 40960 resident contexts. Almost the entire
+problem is therefore in flight at once, and taken literally that suggests a ceiling of 40960
+against a single CPU thread. That number is useless, because a GPU thread context is not a CPU
+core. Narrowing it to hardware that can actually retire double precision work, the T4 has 80
+FP64 lanes, and at 1.59 GHz against one core at 3.10 GHz that is about 41 core equivalents.
+
+The 41 figure assumes the CPU core issues a multiply add every cycle, which it does not. The
+sequential inner loop accumulates into one running distance, so it is latency bound on that
+dependency chain. Working backwards from the measurement, 34.5 milliseconds for 33.5 million
+multiply adds at 3.10 GHz is about 3.2 cycles each, which pushes the honest ceiling up to
+roughly 130.
+
+So my prediction is a range of about 41 to 130 depending on how much credit the CPU gets. On the
+input this estimate is built from I measured 14.5, and my best across all three inputs is 14.9.
+Either way I am at about a third of the generous end and a ninth of the strict end. I did not
+profile the gap, so what follows is speculation. The likeliest cause is my point layout. Points
+are stored point major, so with one thread per point consecutive threads read addresses 256 bytes
+apart at d=32, and a warp reading a single dimension touches 32 separate cache lines. Storing
+points dimension major would make those reads contiguous. I left the layout alone deliberately so
+that the three GPU versions differ only in their use of shared memory, but it is the first thing
+I would change given more time.
+
+
+Which implementation is slowest
+
+Thrust is slowest of the three parallel versions on all three inputs, and that is what I
+expected. Section 3.4 says so directly, and the reason is visible in the structure rather than in
+any profile. The hand written kernels read each point once per iteration. Thrust sorts 65536
+indices, then materializes two million keys and two million doubles, then reduces them, and does
+all of that again next iteration. On the largest input it moves roughly four times the bytes that
+the CUDA kernels move, and it is about 1.6 times slower end to end.
+
+What did surprise me is that Thrust scales up better than the other two rather than worse. It
+goes from 1.4 to 7.4 to 8.8 as the input grows while the CUDA versions flatten out after the
+middle input. Sorting and the two reduce_by_key passes have a fixed cost per iteration that does
+not care much about n, so the small input is nearly all overhead and the large one amortizes it.
+
+The 2048 point input is the weak case for every GPU version. 2048 points over 256 thread blocks
+is 8 blocks on a 40 SM card, so most of the machine is idle and the per iteration launch and copy
+costs dominate. Only 4.2 times sequential there, against about 15 on the larger inputs.
+
+
+What fraction of the runtime is data transfer
+
+[GRAPH GOES HERE: breakdown.png]
+
+Measured with CUDA events around every copy, transfer is 12 to 17 percent of end to end runtime
+for the basic CUDA version, 8 to 17 percent for shared memory, and 5 to 13 percent for Thrust.
+On the largest input the basic version spends 4.22 of 30.79 milliseconds in transfer, which is
+13.7 percent. These rows are single runs rather than best of five, so treat them as approximate.
+The percentage is lowest for Thrust only because its denominator is largest.
+
+Nearly all of that is one copy. The point array is 16.78 MB on the largest input and goes up once
+before the loop. The per iteration traffic is just the k by d centroid buffer coming back for the
+convergence test, which is 4 KB, and the labels come back once at the end at 262 KB. So about 98
+percent of the bytes crossing the bus are the initial upload, and the 13.7 percent would fall
+further on an input that needed more iterations.
+
+This also means transfer is not what is holding me back. If the kernels took no time at all, the
+largest input would still finish in about 5.7 milliseconds, which would be roughly 85 times
+sequential rather than 14.5. The limit is inside the kernel.
+
+
+Insights
+
+The thing I will remember is that optimizing the wrong resource makes code slower, not neutral.
+The shared memory version removes 94 percent of the global atomics and still loses to the version
+that does them all, because it pays for that with two barriers, a zeroing pass and a flush, and
+atomics were not the limit. I also got this backwards in the other direction partway through. I
+tried dropping the centroid staging on the theory that the L1 cache was already broadcasting
+them, and it came out 40 percent slower on the largest input, because the kernel streams 16 MB of
+points through that same cache every iteration and evicts the centroids continuously. Both
+mistakes were reasoning about a bottleneck I had not measured.
+
+The second is that precision is a hardware decision here and not just a numerical one. I used
+double throughout because the output format is %lf and the spec discusses thresholds down to
+1e-10. On this card that costs a factor of 32 in arithmetic throughput, and it is the single
+largest term in the gap between my 14.9 and the 40960 that a naive thread count would predict.
+
+
+Time spent
+
+Approximately 15 hours.
