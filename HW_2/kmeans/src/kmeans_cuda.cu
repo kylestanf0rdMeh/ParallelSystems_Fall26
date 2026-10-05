@@ -63,15 +63,13 @@ __global__ void assign_points_shared(const double *points, const double *centroi
                                      int dims)
 {
     extern __shared__ double shared[];
-    double *shared_centroids = shared;
-    double *shared_sums = shared + n_cluster * dims;
-    int *shared_counts = (int *)(shared + 2 * n_cluster * dims);
+    double *shared_sums = shared;
+    int *shared_counts = (int *)(shared + n_cluster * dims);
 
     int entries = n_cluster * dims;
 
     for (int i = threadIdx.x; i < entries; i += blockDim.x)
     {
-        shared_centroids[i] = centroids[i];
         shared_sums[i] = 0.0;
     }
     for (int c = threadIdx.x; c < n_cluster; c += blockDim.x)
@@ -95,7 +93,7 @@ __global__ void assign_points_shared(const double *points, const double *centroi
             double dist = 0.0;
             for (int j = 0; j < dims; j++)
             {
-                double diff = point[j] - shared_centroids[c * dims + j];
+                double diff = point[j] - centroids[c * dims + j];
                 dist += diff * diff;
             }
             if (c == 0 || dist < best_dist)
@@ -158,9 +156,12 @@ static double max_centroid_shift(const double *a, const double *b, int n_cluster
     return sqrt(worst);
 }
 
+// only the per block accumulator is staged. the centroids are read straight from global
+// because every thread in a warp wants the same element and the cache already broadcasts it,
+// so staging them doubled the footprint and cost occupancy for nothing.
 static size_t shared_bytes_needed(int n_cluster, int dims)
 {
-    return 2 * (size_t)n_cluster * dims * sizeof(double) + (size_t)n_cluster * sizeof(int);
+    return (size_t)n_cluster * dims * sizeof(double) + (size_t)n_cluster * sizeof(int);
 }
 
 static void run_cuda(const double *points, int n_points, double *centroids, int *labels,
