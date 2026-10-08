@@ -12,7 +12,9 @@ fi
 
 NAME=kyle_stanford_$1_lab2
 STAGE=/tmp/$NAME
-ARCHIVE=/tmp/$NAME.tar.gz
+# the archive lands here rather than /tmp so it shows up in the codio file tree and can be
+# downloaded from there. *.tar.gz is gitignored, so it will not get committed by accident.
+ARCHIVE=$NAME.tar.gz
 
 rm -rf "$STAGE" "$ARCHIVE"
 mkdir -p "$STAGE/bin"
