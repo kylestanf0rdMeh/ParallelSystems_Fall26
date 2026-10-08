@@ -12,6 +12,7 @@ EXEC = bin/kmeans
 all: clean compile
 
 compile:
+	mkdir -p bin
 	$(NVCC) $(SRCS) $(OPTS) -o $(EXEC)
 
 clean:

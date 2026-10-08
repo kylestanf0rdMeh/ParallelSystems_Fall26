@@ -61,6 +61,35 @@ def plot_speedup(best):
     fig.savefig(os.path.join(OUT, "speedup.png"), dpi=150)
 
 
+def plot_times(best):
+    fig, ax = plt.subplots(figsize=(7, 4.5))
+    width = 0.2
+    spots = range(len(INPUTS))
+    algs = ["seq"] + GPU
+    colors = dict(COLORS)
+    colors["seq"] = "tab:gray"
+
+    for i, alg in enumerate(algs):
+        heights = [best[(n, alg)] for n in INPUTS]
+        offset = (i - 1.5) * width
+        bars = ax.bar([x + offset for x in spots], heights, width,
+                      color=colors[alg], label=alg)
+        for b, h in zip(bars, heights):
+            ax.text(b.get_x() + b.get_width() / 2, h * 1.1, "%.2f" % h,
+                    ha="center", fontsize=6)
+
+    # the inputs span two orders of magnitude, so a linear axis hides the small one entirely
+    ax.set_yscale("log")
+    ax.set_xticks(list(spots))
+    ax.set_xticklabels([LABELS[n] for n in INPUTS])
+    ax.set_ylabel("milliseconds per iteration")
+    ax.set_title("Time per iteration, best of five runs")
+    ax.legend(fontsize=8)
+    ax.grid(alpha=0.3, axis="y", which="both")
+    fig.tight_layout()
+    fig.savefig(os.path.join(OUT, "times.png"), dpi=150)
+
+
 def plot_breakdown(rows):
     fig, axes = plt.subplots(1, 3, figsize=(12, 4))
 
@@ -97,6 +126,7 @@ def main():
     os.makedirs(OUT, exist_ok=True)
     best = read_sweep()
     plot_speedup(best)
+    plot_times(best)
     plot_breakdown(read_breakdown())
 
     print("best ms per iteration")

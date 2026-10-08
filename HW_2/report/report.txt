@@ -46,6 +46,12 @@ Speedup is sequential time divided by parallel time, so higher is better.
 Basic CUDA is fastest on every input at 4.2, 14.9 and 14.5 times sequential. Shared memory
 follows at 3.3, 12.9 and 12.1, and Thrust is last at 1.4, 7.4 and 8.8.
 
+[GRAPH GOES HERE: times.png]
+
+The same runs in absolute terms, on a log axis because the three inputs span two orders of
+magnitude. Sequential runs 34.5 milliseconds per iteration on the largest input against 2.4 for
+basic CUDA.
+
 Thrust being slowest is what I expected, and section 3.4 says as much. The hand written kernels
 read each point once per iteration. Thrust sorts 65536 indices, materializes two million keys and
 two million doubles, reduces them, and does all of it again next iteration, moving roughly four
