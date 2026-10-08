@@ -13,3 +13,7 @@ inputs/
 .DS_Store
 Thumbs.db
 *.tar.gz
+
+# word leaves these behind while a document is open
+~$*
+~WRL*.tmp
