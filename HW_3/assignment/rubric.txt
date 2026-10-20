@@ -1,0 +1,91 @@
+Go BST Rubric
+Criteria	Ratings	Points
+Sequential Implementation
+view longer description
+
+Full Marks
+10 pts
+
+No Marks
+0 pts
+/10 pts
+Hash Correctness / Scaling
+view longer description
+
+Full Marks
+10 pts
+
+No Marks
+0 pts
+/10 pts
+Hash Grouping Correctness
+view longer description
+
+Full Marks
+10 pts
+
+No Marks
+0 pts
+/10 pts
+Hash Grouping Scaling
+view longer description
+
+Full Marks
+5 pts
+
+No Marks
+0 pts
+/5 pts
+Comparison Correctness
+view longer description
+
+Full Marks
+10 pts
+
+No Marks
+0 pts
+/10 pts
+Comparison Scaling
+view longer description
+
+Full Marks
+5 pts
+
+No Marks
+0 pts
+/5 pts
+Hashing Questions
+view longer description
+
+Full Marks
+15 pts
+
+No Marks
+0 pts
+/15 pts
+Hash Grouping Questions
+view longer description
+
+Full Marks
+15 pts
+
+No Marks
+0 pts
+/15 pts
+Comparison Questions
+view longer description
+
+Full Marks
+20 pts
+
+No Marks
+0 pts
+/20 pts
+Extra Credit
+
+Full Marks
+10 pts
+
+No Marks
+0 pts
+/10 pts

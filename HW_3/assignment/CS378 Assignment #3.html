@@ -1,0 +1,259 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN">
+<!-- saved from url=(0061)https://www.cs.utexas.edu/~rossbach/cs380p/lab/go-cs380p.html -->
+<html><head><meta http-equiv="Content-Type" content="text/html; charset=windows-1252">
+	
+	<title>CS378 Assignment #3</title>
+		<style type="text/css">
+	body{ background-color: #EFEFEF; 
+				font-size:14.0pt;
+				font-family:"Times New Roman";
+				mso-fareast-font-family:"Times New Roman";}
+	h2{ line-height:1;}
+	h3{ line-height:1;}
+	h4{ line-height:1;}
+	pre{line-height:1;}
+	code{line-height:1}
+	table{ background-color: #F1EFEF; 
+				font-size:12.0pt;
+				font-family:"Times New Roman";
+				mso-fareast-font-family:"Times New Roman";} 
+	.strike{text-decoration: line-through;}
+	.red-one{background-color: red;
+					 rowspan: 3}
+		</style>
+</head>
+<body>
+<h1>CS380P: Parallel Systems</h1>
+<h2>Lab #3</h2>
+<p>
+	The goal of this assignment is to write a program in a language
+	that restricts the programming model to simplify dealing with
+	concurrency: Google's Go. You will use channels, go-routines, and
+	signaling to compute binary search tree equivalence.
+</p><p>
+	It is <b>highly</b> recommended that you read <b>all</b> instructions for this lab before
+	you start coding.
+	
+</p><h3>Binary Search Trees</h3>
+<p>
+	A binary search tree (BST) is a simple data structure where
+	each node contains a data value and pointers to left and right
+	subtrees. Each subtree is constrained such that the left
+	substree contains only values smaller than its parent and the
+	right subtree contains only values larger than its
+	parent. While this constraint generally helps the average
+	search time, it also limits where new values can be inserted
+	(without displacing old values). This means the organization
+	of the tree is dependent on the order in which values are
+	inserted; two "identical" trees can have have very different
+	layouts despite containing the same values.
+
+</p><p>
+        Consider the two example trees below, each of which encodes
+	the sort order 1, 2, 4, 8, 16. The tree on left, is produced
+	by <b>insertion</b> orders in which 8 is inserted first, while
+	the one on the right is produced by insertion orders in which
+	2 is inserted first. However, despite the fact that the data structures
+	have different node-level organizations, an in-order traversal
+	of the trees produces the same sort order, and the BSTs are
+	therefore said to be "equivalent."
+
+<table class="people">
+<tbody><tr>
+  <td>
+    <img src="./CS378 Assignment #3_files/bst-8-first.png">
+  </td>
+  <td>
+    <img src="./CS378 Assignment #3_files/bst-2-first.png">
+  </td>
+<td>
+</td></tr>
+</tbody></table>
+	
+
+</p><h3>Algorithm</h3>
+<p>
+	Given a set of binary search trees, we would like to determine which
+	trees contain the same values. We can do this naively by comparing 
+	each tree to every other tree to see if they are the same (if
+	traversing them in order results in the same values). However, this
+	is highly inefficient.
+</p><p>
+	Instead, we will first compute a hash of each tree by traversing it
+	in order. We can then compare the hashes of the trees rather than the
+	trees themselves. If the hashes of two trees are different, no
+	further work is necessary. If the hashes of the trees are the same,
+	the trees must be compared to see if they are really the same.
+</p><p>
+	Deliverables will be detailed below, but the focus is on a writeup 
+	that provides performance measurements as graphs, and answers
+	(perhaps speculatively) a number of questions. Spending some time
+	setting yourself up to quickly and easily collect and visualize
+	performance data is a worthwhile time investment since it will come up
+	over and over in this lab and for the rest of the course.
+
+</p><h3>Input files</h3>
+<p>
+	We have prepared a few input files to help you with this assignment:
+	<a href="https://www.cs.utexas.edu/~rossbach/cs380p/lab/go-sample-inputs/simple.txt">simple.txt</a>,
+	<a href="https://www.cs.utexas.edu/~rossbach/cs380p/lab/go-sample-inputs/coarse.txt">coarse.txt</a>, and
+	<a href="https://www.cs.utexas.edu/~rossbach/cs380p/lab/go-sample-inputs/fine.txt">fine.txt</a>.
+	Simple.txt is intended to be small to simplify debugging, especially via
+	print statements. Coarse.txt contains a small number of
+	very large trees, which should allow you to observe the benefits of
+	parallelism without high amounts of overhead. Fine.txt contains many
+	very small trees and should start to test the overhead and scalability
+	of your implementation.
+
+</p><h3>Step 1: Create a sequential solution</h3>
+<p>
+	In step 1 of the lab, you will write a program that accepts command-line
+	parameters to specify the following:
+	</p><ul>
+		<li><code>-hash-workers=</code> integer-valued number of threads</li>
+		<li><code>-data-workers=</code> integer-valued number of threads</li>
+		<li><code>-comp-workers=</code> integer-valued number of threads</li>
+		<li><code>-input=</code> string-valued path to an input file.</li>
+	</ul>
+
+<p>
+	While the options allow you to specify a number of workers, your initial
+	solution should just implement a single-threaded version of the
+	algorithm. This greatly simplifies debugging and gives you a baseline
+	against which to measure subsequent parallel versions. At this point,
+	your implementation should:
+	</p><ul>
+		<li>contruct BSTs as specified by the file</li>
+		<ul>
+			<li>each line represents a different BST and ends in a newline character</li>
+			<li>the numbers on each line, which are separated by spaces, are the values contained in the BST</li>
+			<li>numbers should be inserted into the BST in the order provided</li>
+		</ul>
+		<li>generate a hash of each BST</li>
+		<li>store the hashes and identify potential duplicates</li>
+		<li>compare trees with identical hashes to determine their equality</li>
+		<li>for each tree, store the IDs of each identical tree</li>
+		<ul>
+			<li>a BST's ID is just the index of it in the input file</li>
+		</ul>
+	</ul>
+
+<h3>Step 2: Parallelize hash operations</h3>
+<p>
+	There are three main steps that you should parallelize, the first of which
+	is computing the BST hashes. During your first implementation, this should
+	be done by spawning a goroutine for each BST. Once you have done this, try
+	spawning <code>hash-workers</code> goroutines (threads) and having them
+	iterate over the
+	available BSTs. Try your code with several different values of
+	<code>hash-workers</code> on both coarse.txt and fine.txt.
+	Which implementation is faster (and by how much)?
+	Can Go manage goroutines well enough that you don't have to worry about
+	how many threads to spawn anymore?
+
+</p><p>
+	For simplicity, we recommend you use the faster of your implementations
+	before proceeding. With your hashing parallelized, you will now need to
+	place these hashes in a shared location and identify duplicates. We believe
+	the easiest way to do both of these is to use a map from hashes to BST IDs
+	with that hash. However, since appending a new BST ID is not atomic, we must
+	protect the shared data structure. For your first implementation, spawn a
+	single thread to insert data into the map and have your hashing
+	threads communicate with it via a channel by sending (hash, BST ID) pairs
+	through it. Since channels are thread safe and only one thread is modifying
+	the data structure at a time, this approach is entirely safe. Once you have
+	done this, make an alternate implementation where the data structure is
+	protected by a single lock and each thread must acquire the lock to add
+	their result to the data structure (i.e. they now fight for the right to do
+	the work of the helper thread before). Compare the speed of both
+	implementations. Which approach has
+	more overhead? How much faster are they compared to a single thread? Which
+	approach do you find simpler?
+</p><p>
+	(Optional) For some extra credit, make two more implementations which use
+	fine grain synchonization to allow up to <code>data-workers</code> threads to
+	access the data structure at once. Since multiple threads will be accessing
+	the data structure, you will have to make sure that only one thread is
+	modifying the entry for a particular hash at a time. Evaluate your
+	performance on both coarse.txt and fine.txt. Was access to the
+	shared data structure a bottleneck before? How do channels and locks compare
+	now that there is more parallelism?
+
+</p><h3>Step 3: Parallelize tree comparisons</h3>
+<p>
+	For simplicity, we recommend you use the faster of your implementations
+	before proceeding. With your hashes parallelized, it is now time to
+	parallelize the final tree comparisons. To keep things simple, you can
+	store BST equivalence using a 2D adjacency matrix where
+	<code>array[i][j] == true</code> implies the BST with ID <code>i</code> is
+	equivalent to the BST with ID <code>j</code>. After you have populated your
+	map from hashes to BST IDs and initialized the adjacency matrix to
+	<code>false</code>, have a single thread traverse it. If a hash
+	is associated with only one BST ID, <code>k</code>, then you can simply
+	assign <code>true</code> to <code>array[k][k]</code> and proceed. However,
+	if a hash has multiple BST IDs associated with it, you will have to compare
+	all of their trees for similarity. For your first implementation, just
+	spawn a goroutine to do each comparison and write the result to the
+	adjacency matrix if a match is found.
+</p><p>
+	For your second implementation, you will spawn <code>comp-workers</code>
+	threads to do the comparisons and use a concurrent buffer to communicate
+	with them (work can be represented with a (BST ID, BST ID) pair of trees to
+	compare). Since this is not a data structures course, it doesn't matter
+	how the buffer is implemented as long as you make sure that it only holds
+	up to <code>comp-workers</code> items at a time and isn't slow. Your buffer
+	should contain a mutex to prevent concurrency errors when multiple threads
+	try to access the buffer at once. The buffer should also contain two
+	conditions to handle the cases where the main thread tries to insert work
+	when the buffer is full and when the worker threads try to remove work when
+	the buffer is empty. The threads should not "spin" and repeatedly check if
+	the buffer is no longer empty or full. Evaluate your performance on
+	coarse.txt (you can also test your code on fine.txt, but the large number
+	of trees will result in an extremely large adjacency matrix, which will
+	take significantly longer to access). How do the performance and complexity
+	of both approaches compare with each other? How do they scale compared to a
+	single thread? Is the additional complexity of managing a thread pool
+	worthwhile?
+
+</p><h3>Hints</h3>
+	Go includes a lot of useful packages. Argument parsing is
+	<a href="https://gobyexample.com/command-line-flags">trivial</a> with the
+	<a href="https://golang.org/pkg/flag/">flag package</a>. High-precision
+	timing in Go can also be
+	<a href="https://coderwall.com/p/cp5fya/measuring-execution-time-in-go">quite easy</a>
+	using the built-in <a href="https://golang.org/pkg/time/">time package</a>.
+	The <a href="https://golang.org/pkg/io/ioutil/">io/ioutil package</a> makes
+	reading in file data easy. Once you strip the EOF character, you can parse
+	the file with the <a href="https://golang.org/pkg/strings/">strings</a> and
+	<a href="https://golang.org/pkg/strconv/">strconv</a> packages.
+	The <a href="https://golang.org/pkg/sync/">sync package</a> includes a lot
+	of handy tools, including mutexes and conditions. It also includes the
+	WaitGroup, which greatly simplifies waiting on a group of goroutines to
+	finish. Finally, Go contains many familiar data structures, like arrays
+	and maps. However, you may also want to check out the
+	<a href="https://gobyexample.com/slices">slice</a>. It combines the power
+	of lists, arrays, and slicing into a single data structure.
+
+<h3>Deliverables</h3>
+<p>
+  </p><h3>Please follow <a href="https://www.cs.utexas.edu/~rossbach/cs380p/lab/go-submission-cs380p.html">these supplemental instructions and submission guidelines</a>.</h3>
+  <!--
+	You should turn in a writeup based on the
+	<a href="writeup/lab3.tex">lab3.tex</a> template, which formalizes
+	the graphs, tables, and answers you should provide. A build of this template
+	is available here: <a href="writeup/lab3.pdf">lab3.pdf</a>.
+<p>
+	You should also turn in the code,
+	Makefiles, and measurement scripts you used to generate your results.
+	You will use the <code>canvas</code> turn in utility to turn in these materials.
+	<b>Note that we will check solutions for plagiarism using
+	<a href="https://theory.stanford.edu/~aiken/moss">Moss</a>.</b>
+
+<p>
+Please report how much time you spent on the lab.
+</p>
+</ul>
+-->
+
+
+</body></html>
