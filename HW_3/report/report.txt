@@ -101,4 +101,4 @@ memory layout get in the way, but Go was much faster to write.
 
 Time spent
 
-Approximately [FILL IN] hours.
+Approximately 12 hours.
