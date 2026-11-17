@@ -104,4 +104,4 @@ which I credit to the compiler more than to me.
 
 Time spent
 
-Approximately X hours.
+Approximately 20 hours.
