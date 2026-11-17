@@ -1,0 +1,107 @@
+CS380P Lab 4: Two-Phase Commit in Rust
+
+Kyle Stanford
+
+
+Introduction
+
+This lab implements two-phase commit with a coordinator, a set of participants and a set of
+clients. Each role is a separate process started from the same Rust binary, and they talk over
+ipc-channel. The coordinator decides every transaction. Run mode takes -s, the chance that a
+participant's operation succeeds, and -S, the chance that a vote message is actually delivered.
+I ran each configuration three times and report the mean. All 51 runs passed the checker.
+
+
+Hardware
+
+All measurements were taken on a Codio VM with 8 cores. The VM is shared with other tenants, so
+the numbers are noisy. Times are wall clock for the whole run, including process startup.
+
+
+Section 1: Approach
+
+Run mode starts the coordinator, which spawns each participant and client as a child process of
+the same binary. Each child connects back through a one-shot IPC server whose name is passed with
+--ipc_path, creates two channels, and sends the coordinator its ends, so every child has one
+channel each way to the coordinator. This works because ipc-channel senders and receivers can
+themselves be sent over a channel.
+
+The coordinator handles one transaction at a time. When a client request comes in it sends a
+propose to every participant and collects the votes, then logs the commit or abort, sends the
+decision to all participants and sends the result to the client. Clients send one request and
+wait for its result before sending the next.
+
+On a propose, a participant performs the operation, which succeeds with probability s, logs its
+vote and sends it. The send is dropped with probability 1 minus S, which is how message loss is
+simulated. On a decision, it logs the decision.
+
+The ipc-channel version pinned by the skeleton, 0.14, has no receive with a timeout. So the
+coordinator starts one small thread per child that forwards its IPC receiver into a std mpsc
+channel, and waits on those with recv_timeout. The vote timeout is 10 milliseconds. An abort vote,
+or a missing vote after the timeout, aborts the transaction, since the coordinator does not know S.
+A vote that arrives after its transaction was already decided is matched by txid and dropped.
+
+The coordinator stops when all c*r requests are decided or on Ctrl-C, then sends an exit message
+to every child. Each child prints its committed, aborted and unknown counts and exits, and the
+coordinator waits on every child process before returning. A transaction caught mid-vote by
+Ctrl-C is counted as unknown. Ctrl-C reaches every process, but only the coordinator knows whether
+a transaction is in flight, so clients just stop sending and everyone else waits for the exit
+message.
+
+
+Section 2: Performance
+
+Throughput did not scale with clients. With 10 participants and 200 requests per client, 1 client
+ran at 457 transactions per second, 2 clients at 479, 4 at 462, 8 at 482, 16 at 420 and 20 at 366.
+
+[GRAPH GOES HERE: clients.png]
+
+The drop at 16 and 20 clients came from one slow run in each set, 9.8 seconds instead of 6.5 at 16
+clients and 16.2 instead of 8.3 at 20. Those two runs also had 6 and 18 aborts with s and S both 1,
+so votes missed the timeout while the VM stalled. Without them, 16 and 20 clients ran at about 490
+and 483. So throughput stays around 460 to 490 regardless of client count. The coordinator is
+sequential, so extra clients just queue up.
+
+Throughput fell as participants were added. With 4 clients, 1 participant ran at 860 transactions
+per second, 2 at 900, 4 at 817, 8 at 529 and 10 at 483.
+
+[GRAPH GOES HERE: participants.png]
+
+Each transaction costs a propose, a vote and a decision message per participant, all handled by
+the single coordinator thread. One and two participants were about the same, so with few
+participants the fixed cost per transaction dominates.
+
+With 4 clients, 10 participants, S at 1 and 2400 transactions per value, the commit rate tracked
+s^10: 0.578 at s=0.95 against an expected 0.599, 0.326 at s=0.90 against 0.349, and 0.101 at
+s=0.80 against 0.107. Lower s was also slower, 1.90, 2.57 and 2.97 seconds against 1.65 at s=1,
+which I did not expect since an abort vote lets the coordinator decide early. My guess is that the
+remaining votes for an aborted transaction still arrive and have to be pulled and dropped during
+the next one, which adds message traffic and context switching across about 15 processes and their
+forwarder threads on 8 cores.
+
+With s at 1, the commit rate tracked S^10 as well: 0.613 at S=0.95 against 0.599, 0.356 at S=0.90
+against 0.349, and 0.098 at S=0.80 against 0.107. Here the cost is almost entirely the timeout.
+Runs took 4.34, 6.43 and 8.12 seconds, and at S=0.80 about 721 of 800 transactions aborted, each
+waiting out the full 10 milliseconds, which is about 7.2 seconds of the 8.1 second run.
+
+
+Section 3: Difficulties and insights
+
+The hardest decision was the timeout. A short one gives false aborts when the VM stalls, which is
+where the 6 and 18 aborts above came from, while a long one makes every lost vote cost more. The
+grader stops S runs at 120 seconds and can use up to 10000 requests per client, so 50 milliseconds
+would have been too slow. I picked 10, which gave 4 false aborts in 20000 transactions in my tests.
+
+Newer ipc-channel versions do have a timed receive, but newer crates do not build with Codio's
+cargo 1.73, so I stayed on 0.14 and used the forwarder threads instead.
+
+Rust's ownership rules made me decide things C++ would leave implicit. An IpcReceiver can be moved
+to another thread but not shared, so each one has to belong to exactly one forwarder thread, and
+the compiler enforces that. The same goes for the oplog and counters, which only the thread that
+owns the coordinator or participant can touch. I did not hit a race or deadlock while testing,
+which I credit to the compiler more than to me.
+
+
+Time spent
+
+Approximately X hours.
